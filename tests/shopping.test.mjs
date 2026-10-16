@@ -11,7 +11,7 @@ const brot = {
     { amount: 3, amountMax: null, unit: '', name: 'Bananen, reif' },
     { amount: 250, amountMax: null, unit: 'g', name: 'Mehl' },
     { amount: 2, amountMax: 3, unit: '', name: 'Eier' },
-    { amount: null, amountMax: null, unit: '', name: 'Salz' },
+    { amount: null, amountMax: null, unit: '', name: 'Zimt' },
   ],
 };
 const kuchen = {
@@ -48,7 +48,7 @@ test('Zutaten aus dem Plan auf die Personenzahl umrechnen', () => {
   assert.equal(by.Mehl.amount, 500);
   assert.equal(by.Mehl.unit, 'g');
   assert.equal(by.Eier.amount, 6, 'bei Spannen die obere Menge');
-  assert.equal(by.Salz.amount, null);
+  assert.equal(by.Zimt.amount, null);
   assert.deepEqual(by.Mehl.sources, [{ recipe_id: 'r1', plan_id: 'p1', title: 'Bananenbrot', amount: 500 }]);
 });
 
@@ -108,4 +108,13 @@ test('Plan-Einträge auf der Liste und Anzeige', () => {
   assert.equal(formatItemQuantity({ amount: 250, unit: 'ml' }), '250 ml');
   assert.equal(formatItemQuantity({ amount: null, unit: '' }), '');
   assert.equal(formatItemQuantity({ amount: '2', unit: '' }), '2');
+});
+
+test('Grundzutaten kommen nicht auf die Liste', () => {
+  const r = { id: 'r9', title: 'Brot', servings: 1, ingredients: [
+    { amount: 500, unit: 'g', name: 'Mehl' }, { amount: 1, unit: 'TL', name: 'Salz' },
+    { amount: 300, unit: 'ml', name: 'Wasser, lauwarm' }, { amount: 2, unit: 'EL', name: 'Olivenöl' },
+    { amount: null, unit: '', name: 'Salz und Pfeffer' }, { amount: 50, unit: 'g', name: 'Butter oder Öl' },
+  ] };
+  assert.deepEqual(additionsFromPlan([{ plan_id: 'p', recipe: r, servings: 1 }]).map((a) => a.name), ['Mehl']);
 });
