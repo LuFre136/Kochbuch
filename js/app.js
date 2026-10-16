@@ -2,6 +2,7 @@ import { supabase, isConfigured, IMAGE_BUCKET } from './supabase.js';
 import {
   parseIngredientText, parseIngredientLine, formatQuantity, ingredientToLine,
 } from './ingredients.js';
+import { suggestRecipes, STAPLES } from './pantry.js';
 
 const app = document.getElementById('app');
 const nav = document.getElementById('nav');
@@ -99,6 +100,7 @@ async function render() {
   const [first, id, action] = route();
   try {
     if (!first) await renderList();
+    else if (first === 'kochen') await renderPantry();
     else if (first === 'neu') await renderEditor(null);
     else if (first === 'r' && id && action === 'bearbeiten') await renderEditor(id);
     else if (first === 'r' && id) await renderDetail(id);
@@ -199,11 +201,106 @@ function renderNewPassword() {
   };
 }
 
+function tabs(active) {
+  return `<nav class="tabs" aria-label="Ansicht">
+    <a href="#/" class="${active === 'list' ? 'active' : ''}">Alle Rezepte</a>
+    <a href="#/kochen" class="${active === 'pantry' ? 'active' : ''}">Was kann ich kochen?</a>
+  </nav>`;
+}
+
+// Die eingegebenen Zutaten bleiben auf dem Gerät gespeichert, damit man sie nicht jedes Mal neu tippt.
+function loadPantry() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('kochbuch.pantry') || '{}');
+    return { items: Array.isArray(saved.items) ? saved.items : [], useStaples: saved.useStaples !== false };
+  } catch {
+    return { items: [], useStaples: true };
+  }
+}
+
+function savePantry(state) {
+  try { localStorage.setItem('kochbuch.pantry', JSON.stringify(state)); } catch { /* privater Modus */ }
+}
+
+async function renderPantry() {
+  app.innerHTML = '<p class="loading">Lade Rezepte …</p>';
+  const all = await loadRecipes();
+  const state = loadPantry();
+  const known = [...new Set(all.flatMap((r) => r.ingredients.map((i) => i.name.split(',')[0].trim())).filter(Boolean))]
+    .sort(collator.compare);
+
+  app.innerHTML = `
+    ${tabs('pantry')}
+    <div class="pantry card-panel">
+      <label for="have">Welche Zutaten hast du?</label>
+      <div class="import-row">
+        <input id="have" list="known-ingredients" placeholder="z. B. Tomaten" autocomplete="off" enterkeyhint="done">
+        <button type="button" class="btn" id="add-have">Hinzufügen</button>
+      </div>
+      <datalist id="known-ingredients">${known.map((k) => `<option value="${esc(k)}">`).join('')}</datalist>
+      <div class="chips static" id="have-chips"></div>
+      <label class="check"><input type="checkbox" id="staples" ${state.useStaples ? 'checked' : ''}>
+        Grundzutaten sind immer da (${STAPLES.join(', ')})</label>
+    </div>
+    <div id="suggestions"></div>`;
+
+  const input = $('#have');
+  const draw = () => {
+    savePantry(state);
+    $('#have-chips').innerHTML = state.items.map((item, i) => (
+      `<button type="button" class="chip active" data-i="${i}" aria-label="${esc(item)} entfernen">${esc(item)} ×</button>`
+    )).join('') + (state.items.length > 1 ? '<button type="button" class="chip" id="clear-have">Alle entfernen</button>' : '');
+    app.querySelectorAll('#have-chips [data-i]').forEach((chip) => {
+      chip.onclick = () => { state.items.splice(Number(chip.dataset.i), 1); draw(); };
+    });
+    const clear = $('#clear-have');
+    if (clear) clear.onclick = () => { state.items = []; draw(); };
+
+    const out = $('#suggestions');
+    if (!state.items.length) {
+      out.innerHTML = '<p class="hint">Gib ein, was du im Kühlschrank und Vorrat hast. Dann zeige ich dir, welche Rezepte du damit kochen kannst.</p>';
+      return;
+    }
+    const hits = suggestRecipes(all, state.items, { useStaples: state.useStaples });
+    if (!hits.length) {
+      out.innerHTML = '<p class="hint">Kein Rezept passt dazu. Füge weitere Zutaten hinzu.</p>';
+      return;
+    }
+    const complete = hits.filter((h) => !h.missing.length);
+    const partial = hits.filter((h) => h.missing.length);
+    const card = (h) => `<a class="suggestion" href="#/r/${h.recipe.id}">
+      ${h.recipe.images[0] ? `<img src="${esc(imageUrl(h.recipe.images[0]))}" alt="" loading="lazy">` : '<div class="placeholder" aria-hidden="true">🍲</div>'}
+      <div><h3>${esc(h.recipe.title)}</h3>
+      <p class="${h.missing.length ? 'missing' : 'ok'}">${h.missing.length
+        ? `Es fehlt: ${h.missing.map(esc).join(', ')}`
+        : `Alle ${h.total} Zutaten da`}</p></div>
+    </a>`;
+    out.innerHTML = `
+      ${complete.length ? `<h2>Kannst du sofort kochen</h2><div class="suggestions">${complete.map(card).join('')}</div>` : ''}
+      ${partial.length ? `<h2>Fast alles da</h2><div class="suggestions">${partial.map(card).join('')}</div>` : ''}`;
+  };
+
+  const add = () => {
+    const parts = input.value.split(',').map((s) => s.trim()).filter(Boolean);
+    for (const p of parts) {
+      if (!state.items.some((x) => x.toLowerCase() === p.toLowerCase())) state.items.push(p);
+    }
+    input.value = '';
+    draw();
+  };
+  $('#add-have').onclick = () => { add(); input.focus(); };
+  input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } };
+  // Auswahl aus der Vorschlagsliste direkt übernehmen.
+  input.oninput = (e) => { if (!e.inputType || e.inputType === 'insertReplacementText') { if (known.includes(input.value)) add(); } };
+  $('#staples').onchange = (e) => { state.useStaples = e.target.checked; draw(); };
+  draw();
+}
+
 async function renderList() {
   app.innerHTML = '<p class="loading">Lade Rezepte …</p>';
   const all = await loadRecipes();
   if (!all.length) {
-    app.innerHTML = `<div class="empty">
+    app.innerHTML = `${tabs('list')}<div class="empty">
       <h1>Noch keine Rezepte</h1>
       <p>Lege dein erstes Rezept an.</p>
       <a class="btn primary" href="#/neu">+ Neues Rezept</a></div>`;
@@ -212,6 +309,7 @@ async function renderList() {
   const tags = [...new Set(all.flatMap((r) => r.tags))].sort(collator.compare);
   if (activeTag && !tags.includes(activeTag)) activeTag = null;
   app.innerHTML = `
+    ${tabs('list')}
     <div class="search">
       <input type="search" id="q" placeholder="Titel, Beschreibung oder Tag suchen" value="${esc(listQuery)}" aria-label="Rezepte durchsuchen">
     </div>
