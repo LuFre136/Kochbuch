@@ -83,6 +83,8 @@ export function findRecipe(data: unknown): Record<string, unknown> | null {
   return null;
 }
 
+const SECTION_FILLER = /^(zubereitung|anleitung|instructions?|directions?|method)\s*:?$/i;
+
 export function extractInstructions(raw: unknown): string[] {
   const out: string[] = [];
   const walk = (x: unknown) => {
@@ -94,7 +96,9 @@ export function extractInstructions(raw: unknown): string[] {
     } else if (typeof x === 'object') {
       const node = x as Record<string, unknown>;
       if (node.itemListElement) {
-        if (node.name && types(node).includes('HowToSection')) out.push(`${cleanText(node.name)}:`);
+        // Abschnittsnamen wie "Teig" oder "Füllung" behalten, ein bloßes "Zubereitung" ist überflüssig.
+        const name = cleanText(node.name);
+        if (name && types(node).includes('HowToSection') && !SECTION_FILLER.test(name)) out.push(`${name}:`);
         walk(node.itemListElement);
       } else {
         walk(node.text ?? node.name);
