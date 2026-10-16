@@ -109,10 +109,25 @@ export function extractInstructions(raw: unknown): string[] {
 // Ab einer Zeile wie "Tipps und Varianten …:" gehört der Rest in die Notizen.
 const NOTES_HEADING = /^(tipps?|tricks?|hinweise?|anmerkungen?|varianten?|notizen?|serviervorschlag|aufbewahrung)\b/i;
 
+// Auch mitten in einer Zeile, falls die Seite den Absatz nicht umbricht ("… abkühlen lassen. Tipps und Varianten …").
+const NOTES_INLINE = /(?<=[.!?:)]\s*)(tipps?\s+(?:und|&)\s+varianten|tipps?\s+(?:von\s+)?(?:der|des)\s+rezeptautor)/i;
+
 export function splitNotes(lines: string[]): { steps: string[]; notes: string } {
-  const at = lines.findIndex((l) => NOTES_HEADING.test(l));
-  if (at <= 0) return { steps: lines, notes: '' };
-  return { steps: lines.slice(0, at), notes: lines.slice(at).join('\n') };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (i > 0 && NOTES_HEADING.test(line.replace(/^[\s*•#_–-]+/, ''))) {
+      return { steps: lines.slice(0, i), notes: lines.slice(i).join('\n') };
+    }
+    const m = line.match(NOTES_INLINE);
+    if (m && m.index) {
+      const before = line.slice(0, m.index).trim();
+      return {
+        steps: [...lines.slice(0, i), ...(before ? [before] : [])],
+        notes: [line.slice(m.index).trim(), ...lines.slice(i + 1)].join('\n'),
+      };
+    }
+  }
+  return { steps: lines, notes: '' };
 }
 
 function firstImageUrl(img: unknown): string | null {
