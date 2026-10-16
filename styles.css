@@ -186,3 +186,8 @@ legend { font-weight: 600; padding: 0 4px; }
   .brand { font-size: 1rem; }
   #nav .btn.small { padding: 0 10px; }
 }
+
+.import { display: grid; gap: 4px; padding: 14px; }
+.import-row { display: flex; gap: 8px; }
+.import-row input { flex: 1; min-width: 0; }
+.import .hint:empty { display: none; }

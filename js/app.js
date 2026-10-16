@@ -340,6 +340,17 @@ async function renderEditor(id) {
       <a class="back" href="${existing ? `#/r/${existing.id}` : '#/'}">← Abbrechen</a>
       <h1>${existing ? 'Rezept bearbeiten' : 'Neues Rezept'}</h1>
 
+      ${existing ? '' : `<div class="import card-panel">
+        <label>Aus Link importieren
+          <div class="import-row">
+            <input type="url" id="import-url" inputmode="url" placeholder="https://www.chefkoch.de/rezepte/…" autocomplete="off">
+            <button type="button" class="btn primary" id="import-btn">Importieren</button>
+          </div>
+          <small>Liest Titel, Zutaten, Zubereitung, Zeiten und Bild aus. Danach kannst du alles anpassen.</small>
+        </label>
+        <p class="hint" id="import-msg" role="status"></p>
+      </div>`}
+
       <label>Titel <input name="title" required maxlength="200" value="${esc(r.title)}"></label>
       <label>Kurze Beschreibung <textarea name="description" rows="2">${esc(r.description)}</textarea></label>
       <label>Tags <input name="tags" value="${esc(r.tags.join(', '))}" placeholder="z. B. vegetarisch, schnell, Pasta">
@@ -400,6 +411,8 @@ async function renderEditor(id) {
   };
   drawThumbs();
 
+  if (!existing) setupImport(form, { addImage: (file) => { newFiles.push({ file, preview: URL.createObjectURL(file) }); drawThumbs(); }, drawPreview });
+
   form.onsubmit = async (e) => {
     e.preventDefault();
     const save = $('#save');
@@ -450,6 +463,57 @@ async function renderEditor(id) {
       save.textContent = 'Speichern';
     }
   };
+}
+
+// Import per Link: die Edge Function "import-recipe" lädt die Seite und liest das Rezept aus.
+function setupImport(form, { addImage, drawPreview }) {
+  const input = $('#import-url');
+  const btn = $('#import-btn');
+  const msg = $('#import-msg');
+
+  const run = async () => {
+    const url = input.value.trim();
+    if (!safeUrl(url)) { msg.textContent = 'Bitte einen vollständigen Link (https://…) einfügen.'; return; }
+    btn.disabled = true;
+    btn.textContent = 'Lade …';
+    msg.textContent = '';
+    try {
+      const { data, error } = await supabase.functions.invoke('import-recipe', { body: { url } });
+      if (error) {
+        let detail = error.message;
+        const status = error.context?.status;
+        try { detail = (await error.context.json()).error || detail; } catch { /* keine JSON-Antwort */ }
+        if (status === 404) detail = 'Die Import-Funktion ist in Supabase noch nicht eingerichtet (siehe README).';
+        throw new Error(detail);
+      }
+      if (data.title) form.title.value = data.title;
+      if (data.description) form.description.value = data.description;
+      if (data.tags?.length) form.tags.value = data.tags.join(', ');
+      if (data.servings) form.servings.value = data.servings;
+      if (data.total_minutes != null) form.total_minutes.value = data.total_minutes;
+      if (data.cook_minutes != null) form.cook_minutes.value = data.cook_minutes;
+      if (data.ingredients?.length) form.ingredients.value = data.ingredients.join('\n');
+      if (data.steps?.length) form.steps.value = data.steps.join('\n');
+      const sources = form.sources.value.split('\n').map((s) => s.trim()).filter(Boolean);
+      if (!sources.includes(data.source)) form.sources.value = [...sources, data.source].join('\n');
+      if (data.image) {
+        const blob = await (await fetch(data.image)).blob();
+        addImage(new File([blob], 'import.jpg', { type: blob.type }));
+      }
+      drawPreview();
+      msg.textContent = data.ingredients?.length
+        ? 'Importiert. Prüfe die Angaben und tippe auf Speichern.'
+        : 'Auf dieser Seite wurden keine Rezeptdaten gefunden. Titel und Bild sind übernommen, den Rest bitte selbst ergänzen.';
+      input.value = '';
+    } catch (err) {
+      msg.textContent = `Import fehlgeschlagen: ${err.message}`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Importieren';
+    }
+  };
+  btn.onclick = run;
+  input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); run(); } };
 }
 
 // ---------- Start ----------
