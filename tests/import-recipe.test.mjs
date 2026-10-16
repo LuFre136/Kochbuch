@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  extractRecipe, parseDuration, parseYield, isAllowedUrl,
+  extractRecipe, parseDuration, parseYield, isAllowedUrl, splitNotes,
 } from '../supabase/functions/import-recipe/index.ts';
 
 const fixture = (name) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
@@ -58,4 +58,18 @@ test('Hilfsfunktionen', () => {
   assert.ok(!isAllowedUrl('http://localhost:54321'));
   assert.ok(!isAllowedUrl('http://169.254.169.254/latest'));
   assert.ok(!isAllowedUrl('file:///etc/passwd'));
+});
+
+test('Tipps der Autorin landen in den Notizen, auch ohne eigenen Absatz', () => {
+  const tips = ['* In einer Dose hält das Brot ca. eine Woche.', '* Wer es lauwarm mag, kurz in die Mikrowelle.'];
+  assert.deepEqual(splitNotes(['Ofen vorheizen.', 'Backen.', 'Tipps und Varianten von der Rezeptautorin:', ...tips]), {
+    steps: ['Ofen vorheizen.', 'Backen.'],
+    notes: ['Tipps und Varianten von der Rezeptautorin:', ...tips].join('\n'),
+  });
+  assert.deepEqual(splitNotes(['Ofen vorheizen.', 'Backen und abkühlen lassen. Tipps und Varianten von der Rezeptautorin: * In einer Dose …']), {
+    steps: ['Ofen vorheizen.', 'Backen und abkühlen lassen.'],
+    notes: 'Tipps und Varianten von der Rezeptautorin: * In einer Dose …',
+  });
+  assert.equal(splitNotes(['Teig rühren.', '**Tipp:** Mit Honig süßen.']).notes, '**Tipp:** Mit Honig süßen.');
+  assert.equal(splitNotes(['Mit Tipps von Oma würzen.', 'Servieren.']).notes, '');
 });
