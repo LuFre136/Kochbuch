@@ -372,3 +372,5 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 0.35); }
 .suggestion .from-book { margin: 0; font-size: 0.8rem; color: var(--muted); }
 .pantry .check + .check, .season-recipes .check { margin-top: 0; }
 .season-recipes .check { margin-bottom: 10px; }
+#pantry-tags .tag-filter { margin: 0 0 4px; }
+#season-tags .tag-filter { margin-bottom: 12px; }

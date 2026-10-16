@@ -308,6 +308,8 @@ function bindSharedToggle(rerender) {
   if (box) box.onchange = () => { setIncludeShared(box.checked); rerender(); };
 }
 
+const pantryTags = new Set();
+
 async function renderPantry() {
   app.innerHTML = '<p class="loading">Lade Rezepte …</p>';
   const { all, sharedBooks } = await searchableRecipes();
@@ -329,6 +331,7 @@ async function renderPantry() {
         Grundzutaten sind immer da (${STAPLES.join(', ')})</label>
       ${sharedToggle(sharedBooks)}
     </div>
+    <div id="pantry-tags"></div>
     <div id="suggestions"></div>`;
 
   const input = $('#have');
@@ -345,10 +348,12 @@ async function renderPantry() {
 
     const out = $('#suggestions');
     if (!state.items.length) {
+      $('#pantry-tags').innerHTML = '';
       out.innerHTML = '<p class="hint">Gib ein, was du im Kühlschrank und Vorrat hast. Dann zeige ich dir, welche Rezepte du damit kochen kannst.</p>';
       return;
     }
-    const hits = suggestRecipes(all, state.items, { useStaples: state.useStaples });
+    const found = suggestRecipes(all, state.items, { useStaples: state.useStaples });
+    const hits = tagFilter($('#pantry-tags'), found.map((h) => h.recipe), pantryTags, draw)(found);
     if (!hits.length) {
       out.innerHTML = '<p class="hint">Kein Rezept passt dazu. Füge weitere Zutaten hinzu.</p>';
       return;
@@ -387,6 +392,23 @@ async function renderPantry() {
   draw();
 }
 
+// Tag-Filter für Trefferlisten: angeboten werden nur Tags, die in den Treffern vorkommen
+// (plus bereits gewählte, damit man sie wieder abwählen kann). Mehrere Tags: einer davon reicht.
+function tagFilter(container, recipes, selected, onChange) {
+  const tags = [...new Set([...recipes.flatMap((r) => r.tags), ...selected])].sort(collator.compare);
+  const useful = selected.size || tags.length > 1 || (tags.length === 1 && !recipes.every((r) => r.tags.includes(tags[0])));
+  container.innerHTML = useful
+    ? `<div class="chips static tag-filter">${tags.map((t) => `<button type="button" class="chip${selected.has(t) ? ' active' : ''}" data-tag="${esc(t)}" aria-pressed="${selected.has(t)}">${esc(t)}</button>`).join('')}</div>` : '';
+  container.querySelectorAll('[data-tag]').forEach((chip) => {
+    chip.onclick = () => {
+      const t = chip.dataset.tag;
+      if (selected.has(t)) selected.delete(t); else selected.add(t);
+      onChange();
+    };
+  });
+  return (list) => (selected.size ? list.filter((h) => h.recipe.tags.some((t) => selected.has(t))) : list);
+}
+
 const fromLine = (r) => (r.from ? `<p class="from-book">aus dem Kochbuch von ${esc(r.from)}</p>` : '');
 
 function pantryTabs(active) {
@@ -401,9 +423,7 @@ const seasonState = { month: new Date().getMonth() + 1, storage: false, focus: n
 async function renderSeason() {
   app.innerHTML = '<p class="loading">Lade Rezepte …</p>';
   const { all, sharedBooks } = await searchableRecipes();
-  const tags = [...new Set(all.flatMap((r) => r.tags))].sort(collator.compare);
   const st = seasonState;
-  for (const t of st.tags) if (!tags.includes(t)) st.tags.delete(t);
 
   app.innerHTML = `
     ${pantryTabs('saison')}
@@ -417,7 +437,7 @@ async function renderSeason() {
     <section class="season-recipes">
       <h2>Passende Rezepte</h2>
       ${sharedToggle(sharedBooks)}
-      ${tags.length ? `<div class="chips static" id="season-tags">${tags.map((t) => `<button type="button" class="chip${st.tags.has(t) ? ' active' : ''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}</div>` : ''}
+      <div id="season-tags"></div>
       <div id="season-results"></div>
     </section>
     <details class="year card-panel">
@@ -454,7 +474,8 @@ async function renderSeason() {
     });
 
     const produce = st.focus.size ? current.filter((p) => st.focus.has(p.name)) : current;
-    const hits = seasonalRecipes(all, produce, [...st.tags]);
+    const found = seasonalRecipes(all, produce);
+    const hits = tagFilter($('#season-tags'), found.map((h) => h.recipe), st.tags, draw)(found);
     $('#season-results').innerHTML = hits.length ? `<div class="suggestions">${hits.map((h) => `<a class="suggestion" href="${recipeHref(h.recipe)}">
       ${h.recipe.images[0] ? `<img src="${esc(imageUrl(h.recipe.images[0]))}" alt="" loading="lazy">` : '<div class="placeholder" aria-hidden="true">🍲</div>'}
       <div><h3>${esc(h.recipe.title)}</h3>${fromLine(h.recipe)}<p class="ok">Saison: ${h.matches.map((p) => esc(p.name)).join(', ')}</p></div></a>`).join('')}</div>`
@@ -466,14 +487,6 @@ async function renderSeason() {
   $('#next-month').onclick = () => step(1);
   $('#storage').onchange = (e) => { st.storage = e.target.checked; draw(); };
   bindSharedToggle(renderSeason);
-  app.querySelectorAll('#season-tags [data-tag]').forEach((chip) => {
-    chip.onclick = () => {
-      const t = chip.dataset.tag;
-      if (st.tags.has(t)) st.tags.delete(t); else st.tags.add(t);
-      chip.classList.toggle('active', st.tags.has(t));
-      draw();
-    };
-  });
   draw();
 }
 
