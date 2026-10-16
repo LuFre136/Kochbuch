@@ -3,6 +3,9 @@ import {
   parseIngredientText, parseIngredientLine, formatQuantity, ingredientToLine,
 } from './ingredients.js';
 import { suggestRecipes, STAPLES } from './pantry.js';
+import {
+  additionsFromPlan, findConflict, mergeInto, removeRecipe, recipesOnList, plannedIds, formatItemQuantity,
+} from './shopping.js';
 
 const app = document.getElementById('app');
 const nav = document.getElementById('nav');
@@ -99,17 +102,25 @@ async function render() {
   if (recoveringPassword) return renderNewPassword();
   const [first, id, action] = route();
   renderTabbar(first);
+  leaveShoppingList();
   // Geteilte Einzelrezepte kann man auch ohne Konto ansehen.
   if (first === 'teilen' && id) {
     renderNav();
     return guarded(() => renderSharedLink(id));
   }
-  if (!session) return renderLogin(first === 'einladung' ? 'Melde dich an oder registriere dich, um das geteilte Kochbuch zu sehen.' : '');
+  if (!session) {
+    return renderLogin({
+      einladung: 'Melde dich an oder registriere dich, um das geteilte Kochbuch zu sehen.',
+      liste: 'Melde dich an oder registriere dich, um die geteilte Einkaufsliste mitzubearbeiten.',
+    }[first] ?? '');
+  }
   renderNav();
   return guarded(async () => {
     if (!first) await renderList();
     else if (first === 'geteilt') await renderSharing();
     else if (first === 'plan') await renderPlan();
+    else if (first === 'einkauf') await renderShopping(id);
+    else if (first === 'liste' && id) await acceptListInvite(id);
     else if (first === 'einladung' && id) await acceptInvite(id);
     else if (first === 'kochbuch' && id && action) await renderCookbookRecipe(id, action);
     else if (first === 'kochbuch' && id) await renderCookbook(id);
@@ -239,6 +250,7 @@ const TABS = [
   ['list', '#/', 'Rezepte'],
   ['pantry', '#/kochen', 'Was kochen?'],
   ['plan', '#/plan', 'Plan'],
+  ['shop', '#/einkauf', 'Einkauf'],
   ['shared', '#/geteilt', 'Geteilt'],
 ];
 
@@ -797,7 +809,7 @@ function setupPlanning(r, currentServings) {
 
 async function renderPlan() {
   app.innerHTML = '<p class="loading">Lade Plan …</p>';
-  const [plan, own] = await Promise.all([loadPlan(), loadRecipes()]);
+  const [plan, own, onLists] = await Promise.all([loadPlan(), loadRecipes(), loadPlannedOnLists()]);
   const byId = new Map(own.map((r) => [r.id, r]));
   const entries = plan.filter((p) => byId.has(p.recipe_id));
   if (!entries.length) {
@@ -806,9 +818,11 @@ async function renderPlan() {
       <a class="btn" href="#/">Zu den Rezepten</a></div>`;
     return;
   }
+  const open = entries.filter((p) => !onLists.has(p.id));
   const days = [...new Set(entries.map((p) => p.planned_for))];
   app.innerHTML = `<h1>Plan</h1>
-    <div id="plan-actions" class="plan-actions"></div>
+    <div id="plan-actions" class="plan-actions">${open.length
+    ? `<button class="btn primary" id="shop-all">${open.length === entries.length ? 'Alle' : `Alle übrigen (${open.length})`} auf die Einkaufsliste</button>` : ''}</div>
     ${days.map((day) => `<section class="plan-day">
       <h2>${esc(formatDay(day))}</h2>
       <div class="suggestions">${entries.filter((p) => p.planned_for === day).map((p) => {
@@ -816,19 +830,385 @@ async function renderPlan() {
     return `<div class="suggestion plan-entry" data-id="${p.id}">
           ${r.images[0] ? `<img src="${esc(imageUrl(r.images[0]))}" alt="" loading="lazy">` : '<div class="placeholder" aria-hidden="true">🍲</div>'}
           <div><h3><a href="#/r/${r.id}">${esc(r.title)}</a></h3>
-            <p class="missing">${p.servings} ${p.servings === 1 ? 'Person' : 'Personen'}</p>
-            <div class="entry-actions"><button class="link danger-link" data-remove="${p.id}">Entfernen</button></div></div>
+            <p class="missing">${p.servings} ${p.servings === 1 ? 'Person' : 'Personen'}${onLists.has(p.id) ? ' · <span class="on-list">✓ auf der Einkaufsliste</span>' : ''}</p>
+            <div class="entry-actions">
+              ${onLists.has(p.id) ? '' : `<button class="link" data-shop="${p.id}">Auf die Einkaufsliste</button>`}
+              <button class="link danger-link" data-remove="${p.id}">Entfernen</button>
+            </div></div>
         </div>`;
   }).join('')}</div>
     </section>`).join('')}`;
 
+  const toShop = (list) => list.map((p) => ({ plan_id: p.id, recipe: byId.get(p.recipe_id), servings: p.servings }));
   app.querySelectorAll('[data-remove]').forEach((b) => {
     b.onclick = async () => {
       const { error } = await supabase.from('meal_plan').delete().eq('id', b.dataset.remove);
       if (error) toast(error.message); else renderPlan();
     };
   });
-  return { entries, byId };
+  app.querySelectorAll('[data-shop]').forEach((b) => {
+    b.onclick = async () => {
+      if (await addPlanToList(toShop(entries.filter((p) => p.id === b.dataset.shop)))) renderPlan();
+    };
+  });
+  const all = $('#shop-all');
+  if (all) all.onclick = async () => { if (await addPlanToList(toShop(open))) renderPlan(); };
+}
+
+// ---------- Einkaufen ----------
+
+let listChannel = null;
+let onListVisible = null;
+
+function leaveShoppingList() {
+  if (listChannel) { supabase.removeChannel(listChannel); listChannel = null; }
+  if (onListVisible) { document.removeEventListener('visibilitychange', onListVisible); onListVisible = null; }
+}
+
+function rememberList(id) {
+  try { localStorage.setItem('kochbuch.list', id); } catch { /* privater Modus */ }
+}
+
+function rememberedList() {
+  try { return localStorage.getItem('kochbuch.list'); } catch { return null; }
+}
+
+// Alle Listen, die man sehen darf. Wer noch keine eigene hat, bekommt eine.
+async function loadLists() {
+  const { data, error } = await supabase.from('shopping_lists').select('*').order('created_at');
+  if (error) throw error;
+  if (data.some((l) => l.owner_id === session.user.id)) return data;
+  const created = await supabase.from('shopping_lists').insert({ name: 'Einkaufsliste' }).select().single();
+  if (created.error) throw created.error;
+  return [created.data, ...data];
+}
+
+async function loadItems(listId) {
+  const { data, error } = await supabase.from('shopping_items').select('*').eq('list_id', listId).order('created_at');
+  if (error) throw error;
+  return data;
+}
+
+// Welche Plan-Einträge schon auf irgendeiner Liste stehen.
+async function loadPlannedOnLists() {
+  const { data, error } = await supabase.from('shopping_items').select('sources');
+  if (error) return new Set(); // z. B. wenn einkauf.sql noch nicht ausgeführt wurde
+  return plannedIds(data);
+}
+
+// Einfacher Dialog von unten. Liefert den Wert des gedrückten Knopfs und das Formular.
+function openSheet(html) {
+  return new Promise((resolve) => {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'sheet';
+    dialog.innerHTML = `<form method="dialog" class="sheet-form">${html}</form>`;
+    document.body.append(dialog);
+    dialog.addEventListener('close', () => {
+      resolve({ value: dialog.returnValue, form: dialog.querySelector('form') });
+      dialog.remove();
+    });
+    dialog.showModal();
+  });
+}
+
+const listLabel = (l) => (l.owner_id === session.user.id ? l.name : `${l.name} (geteilt)`);
+
+async function chooseList(lists) {
+  if (lists.length === 1) return lists[0];
+  const current = rememberedList();
+  const { value, form } = await openSheet(`<h2>Auf welche Liste?</h2>
+    <div class="choices">${lists.map((l, i) => `<label class="check"><input type="radio" name="list" value="${l.id}"
+      ${l.id === current || (!lists.some((x) => x.id === current) && i === 0) ? 'checked' : ''}> ${esc(listLabel(l))}</label>`).join('')}</div>
+    <div class="row"><button class="btn primary" value="ok">Weiter</button>
+      <button class="btn ghost" value="cancel" formnovalidate>Abbrechen</button></div>`);
+  if (value !== 'ok') return null;
+  return lists.find((l) => l.id === form.list.value) ?? null;
+}
+
+function sourceTitles(sources) {
+  return [...new Set((sources ?? []).map((s) => s.title))].join(', ');
+}
+
+async function askMerge(item, addition, more) {
+  const merged = mergeInto(item, addition);
+  const { value, form } = await openSheet(`<h2>${esc(item.name)} steht schon auf der Liste</h2>
+    <p>Auf der Liste: <strong>${esc(formatItemQuantity(item) || 'ohne Menge')}</strong>${item.sources?.length ? ` (${esc(sourceTitles(item.sources))})` : ''}<br>
+      Dazu kommen: <strong>${esc(formatItemQuantity(addition) || 'ohne Menge')}</strong> (${esc(sourceTitles(addition.sources))})</p>
+    ${more ? '<label class="check"><input type="checkbox" name="all"> Für alle weiteren doppelten Zutaten genauso</label>' : ''}
+    <div class="row"><button class="btn primary" value="merge">Zusammenrechnen${merged.amount != null ? ` (${esc(formatItemQuantity({ ...item, amount: merged.amount }))})` : ''}</button>
+      <button class="btn" value="new">Neuer Eintrag</button></div>`);
+  return { choice: value === 'new' ? 'new' : 'merge', forAll: Boolean(form.all?.checked) };
+}
+
+// Setzt die Zutaten eingeplanter Rezepte auf eine Liste. Liefert true, wenn etwas passiert ist.
+async function addPlanToList(entries) {
+  try {
+    const list = await chooseList(await loadLists());
+    if (!list) return false;
+    const items = await loadItems(list.id);
+    const additions = additionsFromPlan(entries);
+    const conflicts = additions.filter((a) => findConflict(a, items)).length;
+    let asked = 0;
+    let fixed = null;
+    const inserts = [];
+    for (const addition of additions) {
+      const item = findConflict(addition, items);
+      let choice = 'new';
+      if (item) {
+        asked += 1;
+        if (fixed) choice = fixed;
+        else {
+          const answer = await askMerge(item, addition, conflicts - asked);
+          choice = answer.choice;
+          if (answer.forAll) fixed = choice;
+        }
+      }
+      if (item && choice === 'merge') {
+        const patch = mergeInto(item, addition);
+        const { error } = await supabase.from('shopping_items').update(patch).eq('id', item.id);
+        if (error) throw error;
+        Object.assign(item, patch);
+      } else {
+        inserts.push({ list_id: list.id, name: addition.name, amount: addition.amount, unit: addition.unit, sources: addition.sources });
+      }
+    }
+    if (inserts.length) {
+      const { error } = await supabase.from('shopping_items').insert(inserts);
+      if (error) throw error;
+    }
+    rememberList(list.id);
+    toast(`${additions.length} ${additions.length === 1 ? 'Zutat' : 'Zutaten'} auf „${list.name}“`);
+    return true;
+  } catch (err) {
+    toast(err.message);
+    return false;
+  }
+}
+
+async function renderShopping(listId) {
+  app.innerHTML = '<p class="loading">Lade Einkaufsliste …</p>';
+  const lists = await loadLists();
+  const me = session.user.id;
+  const list = lists.find((l) => l.id === listId)
+    ?? lists.find((l) => l.id === rememberedList())
+    ?? lists.find((l) => l.owner_id === me);
+  if (listId && list.id !== listId) toast('Diese Liste gibt es nicht mehr.');
+  rememberList(list.id);
+  const isOwner = list.owner_id === me;
+  const ownCount = lists.filter((l) => l.owner_id === me).length;
+  let items = await loadItems(list.id);
+  const people = await supabase.rpc('list_people', { p_list: list.id });
+  const members = (people.data ?? []).filter((p) => !p.is_owner);
+  const owner = (people.data ?? []).find((p) => p.is_owner);
+
+  app.innerHTML = `
+    <div class="list-head">
+      <select id="list-select" aria-label="Einkaufsliste wählen">
+        ${lists.map((l) => `<option value="${l.id}"${l.id === list.id ? ' selected' : ''}>${esc(listLabel(l))}</option>`).join('')}
+        <option value="new">+ Neue Liste …</option>
+      </select>
+    </div>
+    <form class="import-row add-item" id="add-item">
+      <input name="item" placeholder="z. B. 1 l Milch" autocomplete="off" enterkeyhint="done" aria-label="Eintrag hinzufügen">
+      <button class="btn">Hinzufügen</button>
+    </form>
+    <div id="list-recipes"></div>
+    <ul class="shop-items" id="open-items"></ul>
+    <div id="done-items"></div>
+
+    <section class="card-panel share-section list-settings">
+      <h2>Liste verwalten</h2>
+      ${isOwner ? `
+        <div class="row">
+          <button class="btn" id="rename">Umbenennen</button>
+          ${ownCount > 1 ? '<button class="btn danger" id="delete-list">Liste löschen</button>' : ''}
+        </div>
+        ${ownCount > 1 ? '' : '<p class="hint">Deine einzige Liste kann nicht gelöscht werden.</p>'}
+        <h3>Gemeinsam bearbeiten</h3>
+        <p class="hint">Wer den Einladungslink öffnet und ein Konto hat, kann diese Liste mitbearbeiten.</p>
+        <div class="row">
+          <button class="btn primary" id="list-invite">${list.invite_token ? 'Einladungslink teilen' : 'Einladungslink erstellen'}</button>
+          ${list.invite_token ? '<button class="btn ghost" id="list-invite-reset">Neuen Link erzeugen</button>' : ''}
+        </div>
+        ${members.length ? `<ul class="people">${members.map((p) => `<li><span>${esc(p.email)}</span>
+          <button class="link danger-link" data-member="${p.user_id}">Entfernen</button></li>`).join('')}</ul>` : ''}`
+    : `<p class="hint">Geteilt von ${esc(owner?.email ?? 'jemand anderem')}${members.length > 1 ? ` mit ${members.filter((p) => p.user_id !== me).map((p) => esc(p.email)).join(', ')}` : ''}.</p>
+        <div class="row"><button class="btn danger" id="leave-list">Liste verlassen</button></div>`}
+    </section>`;
+
+  const draw = () => {
+    const open = items.filter((i) => !i.checked);
+    const done = items.filter((i) => i.checked);
+    const row = (i) => `<li class="${i.checked ? 'done' : ''}">
+      <label class="shop-check"><input type="checkbox" data-check="${i.id}" ${i.checked ? 'checked' : ''}>
+        <span><span class="qty">${esc(formatItemQuantity(i))}</span> ${esc(i.name)}
+        ${i.sources?.length ? `<small>${esc(sourceTitles(i.sources))}${i.manual ? ' + von Hand' : ''}</small>` : ''}</span></label>
+      <button class="icon-btn" data-del="${i.id}" aria-label="${esc(i.name)} löschen">×</button></li>`;
+    $('#open-items').innerHTML = open.length ? open.map(row).join('')
+      : `<li class="hint empty-list">${done.length ? 'Alles erledigt.' : 'Die Liste ist leer. Füge oben etwas hinzu oder setze im Plan Rezepte auf die Liste.'}</li>`;
+    $('#done-items').innerHTML = done.length ? `<div class="section-head done-head"><h2>Erledigt (${done.length})</h2>
+      <button class="link danger-link" id="clear-done">Erledigte löschen</button></div>
+      <ul class="shop-items">${done.map(row).join('')}</ul>` : '';
+    const recs = recipesOnList(items);
+    $('#list-recipes').innerHTML = recs.length ? `<p class="hint">Aus Rezepten:</p><div class="chips static">${recs.map((r) => `<span class="chip tag-chip">${esc(r.title)}
+      <button type="button" data-recipe="${esc(r.recipe_id)}" aria-label="${esc(r.title)} von der Liste nehmen">×</button></span>`).join('')}</div>` : '';
+
+    app.querySelectorAll('[data-check]').forEach((box) => {
+      box.onchange = async () => {
+        const item = items.find((i) => i.id === box.dataset.check);
+        item.checked = box.checked;
+        draw();
+        const { error } = await supabase.from('shopping_items').update({ checked: item.checked }).eq('id', item.id);
+        if (error) toast(error.message);
+      };
+    });
+    app.querySelectorAll('[data-del]').forEach((b) => {
+      b.onclick = async () => {
+        items = items.filter((i) => i.id !== b.dataset.del);
+        draw();
+        const { error } = await supabase.from('shopping_items').delete().eq('id', b.dataset.del);
+        if (error) toast(error.message);
+      };
+    });
+    app.querySelectorAll('[data-recipe]').forEach((b) => {
+      b.onclick = async () => {
+        const rec = recs.find((r) => r.recipe_id === b.dataset.recipe);
+        if (!confirm(`Alle Zutaten von „${rec.title}“ von der Liste nehmen?`)) return;
+        const { updates, deletes } = removeRecipe(items, rec.recipe_id);
+        const results = await Promise.all([
+          ...updates.map(({ id, ...patch }) => supabase.from('shopping_items').update(patch).eq('id', id)),
+          deletes.length ? supabase.from('shopping_items').delete().in('id', deletes) : null,
+        ].filter(Boolean));
+        const failed = results.find((r) => r.error);
+        if (failed) toast(failed.error.message); else toast(`„${rec.title}“ von der Liste genommen`);
+        await reload();
+      };
+    });
+    const clear = $('#clear-done');
+    if (clear) {
+      clear.onclick = async () => {
+        const ids = done.map((i) => i.id);
+        items = items.filter((i) => !i.checked);
+        draw();
+        const { error } = await supabase.from('shopping_items').delete().in('id', ids);
+        if (error) toast(error.message);
+      };
+    }
+  };
+
+  let reloading = null;
+  const reload = async () => {
+    if (reloading) return reloading;
+    reloading = loadItems(list.id).then((fresh) => { items = fresh; draw(); })
+      .catch(() => {}).finally(() => { reloading = null; });
+    return reloading;
+  };
+
+  $('#list-select').onchange = async (e) => {
+    if (e.target.value !== 'new') { location.hash = `#/einkauf/${e.target.value}`; return; }
+    e.target.value = list.id;
+    const name = prompt('Name der neuen Liste:', 'Wocheneinkauf')?.trim();
+    if (!name) return;
+    const { data, error } = await supabase.from('shopping_lists').insert({ name: name.slice(0, 80) }).select().single();
+    if (error) { toast(error.message); return; }
+    location.hash = `#/einkauf/${data.id}`;
+  };
+
+  const input = $('#add-item').item;
+  $('#add-item').onsubmit = async (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+    const parsed = parseIngredientLine(text);
+    input.value = '';
+    const { data, error } = await supabase.from('shopping_items').insert({
+      list_id: list.id,
+      name: (parsed.name || text).slice(0, 200),
+      amount: parsed.amountMax ?? parsed.amount,
+      unit: parsed.unit,
+      manual: true,
+    }).select().single();
+    if (error) { toast(error.message); input.value = text; return; }
+    if (!items.some((i) => i.id === data.id)) items.push(data);
+    draw();
+    input.focus();
+  };
+
+  const byId = (sel) => app.querySelector(sel);
+  if (byId('#rename')) {
+    byId('#rename').onclick = async () => {
+      const name = prompt('Neuer Name:', list.name)?.trim();
+      if (!name || name === list.name) return;
+      const { error } = await supabase.from('shopping_lists').update({ name: name.slice(0, 80) }).eq('id', list.id);
+      if (error) toast(error.message); else renderShopping(list.id);
+    };
+  }
+  if (byId('#delete-list')) {
+    byId('#delete-list').onclick = async () => {
+      if (!confirm(`„${list.name}“ mit allen Einträgen löschen?${members.length ? ' Auch für alle, mit denen du sie teilst.' : ''}`)) return;
+      const { error } = await supabase.from('shopping_lists').delete().eq('id', list.id);
+      if (error) { toast(error.message); return; }
+      rememberList('');
+      location.hash = '#/einkauf';
+    };
+  }
+  const invite = async (reset) => {
+    const before = list.invite_token;
+    let token = before;
+    if (!token || reset) {
+      const { data, error } = await supabase.from('shopping_lists').update({ invite_token: crypto.randomUUID() })
+        .eq('id', list.id).select('invite_token').single();
+      if (error) { toast(error.message); return; }
+      token = data.invite_token;
+    }
+    await shareLink(appUrl(`liste/${token}`), list.name);
+    if (token !== before) renderShopping(list.id);
+  };
+  if (byId('#list-invite')) byId('#list-invite').onclick = () => invite(false);
+  if (byId('#list-invite-reset')) {
+    byId('#list-invite-reset').onclick = () => {
+      if (confirm('Der bisherige Einladungslink funktioniert danach nicht mehr. Wer schon mitmacht, bleibt dabei. Fortfahren?')) invite(true);
+    };
+  }
+  app.querySelectorAll('[data-member]').forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm('Diese Person von der Liste entfernen?')) return;
+      const { error } = await supabase.from('shopping_list_members').delete().eq('list_id', list.id).eq('user_id', b.dataset.member);
+      if (error) toast(error.message); else renderShopping(list.id);
+    };
+  });
+  if (byId('#leave-list')) {
+    byId('#leave-list').onclick = async () => {
+      if (!confirm('Liste verlassen? Du brauchst dann einen neuen Einladungslink.')) return;
+      const { error } = await supabase.from('shopping_list_members').delete().eq('list_id', list.id).eq('user_id', me);
+      if (error) { toast(error.message); return; }
+      rememberList('');
+      location.hash = '#/einkauf';
+    };
+  }
+
+  draw();
+
+  // Änderungen der anderen live übernehmen. Löschungen kommen ohne list_id an, deshalb dann immer neu laden.
+  leaveShoppingList();
+  listChannel = supabase.channel(`liste-${list.id}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'shopping_items' }, (payload) => {
+      if (payload.eventType === 'DELETE' || payload.new?.list_id === list.id) reload();
+    })
+    .subscribe();
+  onListVisible = () => { if (document.visibilityState === 'visible') reload(); };
+  document.addEventListener('visibilitychange', onListVisible);
+}
+
+async function acceptListInvite(token) {
+  app.innerHTML = '<p class="loading">Nehme Einladung an …</p>';
+  const { data: listId, error } = await supabase.rpc('accept_list_invite', { p_token: token });
+  if (error) {
+    app.innerHTML = `<div class="notice"><p>${esc(error.message)}</p><a class="btn" href="#/einkauf">Zu meinen Einkaufslisten</a></div>`;
+    return;
+  }
+  toast('Du kannst die Liste jetzt mitbearbeiten');
+  location.replace(`#/einkauf/${listId}`);
 }
 
 // ---------- Teilen ----------

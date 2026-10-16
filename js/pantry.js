@@ -22,7 +22,7 @@ export function normalizeWord(w) {
   return s;
 }
 
-function words(text) {
+export function nameWords(text) {
   return String(text)
     .replace(/\([^)]*\)/g, ' ')
     .split(/[^\p{L}]+/u)
@@ -43,10 +43,10 @@ function wordMatches(have, word) {
 // Ein Begriff des Nutzers (auch mehrere Wörter wie "rote Linsen") passt auf einen Zutatennamen,
 // wenn jedes seiner Wörter zu einem Wort im Namen passt.
 export function termMatches(term, ingredientName) {
-  const termWords = words(term);
-  const nameWords = words(ingredientName);
-  if (!termWords.length || !nameWords.length) return false;
-  return termWords.every((t) => nameWords.some((w) => wordMatches(t, w)));
+  const termWords = nameWords(term);
+  const nameList = nameWords(ingredientName);
+  if (!termWords.length || !nameList.length) return false;
+  return termWords.every((t) => nameList.some((w) => wordMatches(t, w)));
 }
 
 // Zerlegt einen Zutatennamen in Alternativen: "Butter oder Margarine" → eine davon reicht.
