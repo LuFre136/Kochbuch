@@ -278,9 +278,39 @@ function savePantry(state) {
   try { localStorage.setItem('kochbuch.pantry', JSON.stringify(state)); } catch { /* privater Modus */ }
 }
 
+// Auf Wunsch auch Rezepte aus Kochbüchern, die andere mit mir teilen (Einstellung bleibt auf dem Gerät).
+function includeShared() {
+  try { return localStorage.getItem('kochbuch.includeShared') === '1'; } catch { return false; }
+}
+
+function setIncludeShared(on) {
+  try { localStorage.setItem('kochbuch.includeShared', on ? '1' : '0'); } catch { /* privater Modus */ }
+}
+
+// Eigene Rezepte, plus die aus geteilten Kochbüchern, wenn gewünscht. sharedBooks: Anzahl geteilter Kochbücher.
+async function searchableRecipes() {
+  const [own, people] = await Promise.all([loadRecipes(), loadPeople().catch(() => ({ owners: [] }))]);
+  if (!people.owners.length || !includeShared()) return { all: own, sharedBooks: people.owners.length };
+  const books = await Promise.all(people.owners.map((o) => loadCookbook(o.owner_id)));
+  const shared = books.filter(Boolean).flatMap((b) => b.recipes.map((r) => ({ ...r, from: b.email })));
+  return { all: [...own, ...shared], sharedBooks: people.owners.length };
+}
+
+const recipeHref = (r) => (r.from ? `#/kochbuch/${r.owner_id}/${r.id}` : `#/r/${r.id}`);
+
+function sharedToggle(sharedBooks) {
+  return sharedBooks ? `<label class="check"><input type="checkbox" id="include-shared" ${includeShared() ? 'checked' : ''}>
+    Auch Rezepte aus Kochbüchern, die mit mir geteilt wurden</label>` : '';
+}
+
+function bindSharedToggle(rerender) {
+  const box = $('#include-shared');
+  if (box) box.onchange = () => { setIncludeShared(box.checked); rerender(); };
+}
+
 async function renderPantry() {
   app.innerHTML = '<p class="loading">Lade Rezepte …</p>';
-  const all = await loadRecipes();
+  const { all, sharedBooks } = await searchableRecipes();
   const state = loadPantry();
   const known = [...new Set(all.flatMap((r) => r.ingredients.map((i) => i.name.split(',')[0].trim())).filter(Boolean))]
     .sort(collator.compare);
@@ -297,6 +327,7 @@ async function renderPantry() {
       <div class="chips static" id="have-chips"></div>
       <label class="check"><input type="checkbox" id="staples" ${state.useStaples ? 'checked' : ''}>
         Grundzutaten sind immer da (${STAPLES.join(', ')})</label>
+      ${sharedToggle(sharedBooks)}
     </div>
     <div id="suggestions"></div>`;
 
@@ -328,9 +359,9 @@ async function renderPantry() {
     const missingText = (m) => (m.length <= 3
       ? `Es fehlt: ${m.map(esc).join(', ')}`
       : `Es fehlen ${m.length} Zutaten: ${m.slice(0, 3).map(esc).join(', ')} …`);
-    const card = (h) => `<a class="suggestion" href="#/r/${h.recipe.id}">
+    const card = (h) => `<a class="suggestion" href="${recipeHref(h.recipe)}">
       ${h.recipe.images[0] ? `<img src="${esc(imageUrl(h.recipe.images[0]))}" alt="" loading="lazy">` : '<div class="placeholder" aria-hidden="true">🍲</div>'}
-      <div><h3>${esc(h.recipe.title)}</h3>
+      <div><h3>${esc(h.recipe.title)}</h3>${fromLine(h.recipe)}
       <p class="${h.missing.length ? 'missing' : 'ok'}">${h.missing.length ? missingText(h.missing) : `Alle ${h.total} Zutaten da`}</p></div>
     </a>`;
     const section = (title, list) => (list.length ? `<h2>${title}</h2><div class="suggestions">${list.map(card).join('')}</div>` : '');
@@ -352,8 +383,11 @@ async function renderPantry() {
   // Auswahl aus der Vorschlagsliste direkt übernehmen.
   input.oninput = (e) => { if (!e.inputType || e.inputType === 'insertReplacementText') { if (known.includes(input.value)) add(); } };
   $('#staples').onchange = (e) => { state.useStaples = e.target.checked; draw(); };
+  bindSharedToggle(renderPantry);
   draw();
 }
+
+const fromLine = (r) => (r.from ? `<p class="from-book">aus dem Kochbuch von ${esc(r.from)}</p>` : '');
 
 function pantryTabs(active) {
   return `<nav class="segmented" aria-label="Was kochen?">
@@ -366,7 +400,7 @@ const seasonState = { month: new Date().getMonth() + 1, storage: false, focus: n
 
 async function renderSeason() {
   app.innerHTML = '<p class="loading">Lade Rezepte …</p>';
-  const all = await loadRecipes();
+  const { all, sharedBooks } = await searchableRecipes();
   const tags = [...new Set(all.flatMap((r) => r.tags))].sort(collator.compare);
   const st = seasonState;
   for (const t of st.tags) if (!tags.includes(t)) st.tags.delete(t);
@@ -382,6 +416,7 @@ async function renderSeason() {
     <div id="produce"></div>
     <section class="season-recipes">
       <h2>Passende Rezepte</h2>
+      ${sharedToggle(sharedBooks)}
       ${tags.length ? `<div class="chips static" id="season-tags">${tags.map((t) => `<button type="button" class="chip${st.tags.has(t) ? ' active' : ''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}</div>` : ''}
       <div id="season-results"></div>
     </section>
@@ -420,9 +455,9 @@ async function renderSeason() {
 
     const produce = st.focus.size ? current.filter((p) => st.focus.has(p.name)) : current;
     const hits = seasonalRecipes(all, produce, [...st.tags]);
-    $('#season-results').innerHTML = hits.length ? `<div class="suggestions">${hits.map((h) => `<a class="suggestion" href="#/r/${h.recipe.id}">
+    $('#season-results').innerHTML = hits.length ? `<div class="suggestions">${hits.map((h) => `<a class="suggestion" href="${recipeHref(h.recipe)}">
       ${h.recipe.images[0] ? `<img src="${esc(imageUrl(h.recipe.images[0]))}" alt="" loading="lazy">` : '<div class="placeholder" aria-hidden="true">🍲</div>'}
-      <div><h3>${esc(h.recipe.title)}</h3><p class="ok">Saison: ${h.matches.map((p) => esc(p.name)).join(', ')}</p></div></a>`).join('')}</div>`
+      <div><h3>${esc(h.recipe.title)}</h3>${fromLine(h.recipe)}<p class="ok">Saison: ${h.matches.map((p) => esc(p.name)).join(', ')}</p></div></a>`).join('')}</div>`
       : `<p class="hint">${all.length ? 'Keines deiner Rezepte passt dazu.' : 'Du hast noch keine Rezepte.'}</p>`;
   };
 
@@ -430,6 +465,7 @@ async function renderSeason() {
   $('#prev-month').onclick = () => step(-1);
   $('#next-month').onclick = () => step(1);
   $('#storage').onchange = (e) => { st.storage = e.target.checked; draw(); };
+  bindSharedToggle(renderSeason);
   app.querySelectorAll('#season-tags [data-tag]').forEach((chip) => {
     chip.onclick = () => {
       const t = chip.dataset.tag;
@@ -1095,6 +1131,9 @@ async function renderShopping(listId) {
         ${lists.map((l) => `<option value="${l.id}"${l.id === list.id ? ' selected' : ''}>${esc(listLabel(l))}</option>`).join('')}
         <option value="new">+ Neue Liste …</option>
       </select>
+      <select id="item-sort" aria-label="Sortierung">
+        ${[['added', 'Hinzugefügt'], ['name', 'A–Z'], ['recipe', 'Nach Rezept']].map(([v, l]) => `<option value="${v}"${shoppingSort() === v ? ' selected' : ''}>${l}</option>`).join('')}
+      </select>
     </div>
     <form class="import-row add-item" id="add-item">
       <input name="item" placeholder="z. B. 1 l Milch" autocomplete="off" enterkeyhint="done" aria-label="Eintrag hinzufügen">
@@ -1125,18 +1164,26 @@ async function renderShopping(listId) {
     </section>`;
 
   const draw = () => {
-    const open = items.filter((i) => !i.checked);
-    const done = items.filter((i) => i.checked);
+    const sort = shoppingSort();
+    const sorted = sortItems(items, sort);
+    const open = sorted.filter((i) => !i.checked);
+    const done = sorted.filter((i) => i.checked);
     const row = (i) => `<li class="${i.checked ? 'done' : ''}">
       <label class="shop-check"><input type="checkbox" data-check="${i.id}" ${i.checked ? 'checked' : ''}>
         <span><span class="qty">${esc(formatItemQuantity(i))}</span> ${esc(i.name)}
         ${i.sources?.length ? `<small>${esc(sourceTitles(i.sources))}${i.manual ? ' + von Hand' : ''}</small>` : ''}</span></label>
       <button class="icon-btn" data-del="${i.id}" aria-label="${esc(i.name)} löschen">×</button></li>`;
-    $('#open-items').innerHTML = open.length ? open.map(row).join('')
+    // Nach Rezept: Zwischenüberschriften, sobald ein neues Rezept beginnt.
+    const rows = (list) => list.map((item, i) => {
+      const group = groupOf(item);
+      const head = sort === 'recipe' && (i === 0 || groupOf(list[i - 1]) !== group) ? `<li class="group-head">${esc(group)}</li>` : '';
+      return head + row(item);
+    }).join('');
+    $('#open-items').innerHTML = open.length ? rows(open)
       : `<li class="hint empty-list">${done.length ? 'Alles erledigt.' : 'Die Liste ist leer. Füge oben etwas hinzu oder setze im Plan Rezepte auf die Liste.'}</li>`;
     $('#done-items').innerHTML = done.length ? `<div class="section-head done-head"><h2>Erledigt (${done.length})</h2>
       <button class="link danger-link" id="clear-done">Erledigte löschen</button></div>
-      <ul class="shop-items">${done.map(row).join('')}</ul>` : '';
+      <ul class="shop-items">${rows(done)}</ul>` : '';
     const recs = recipesOnList(items);
     $('#list-recipes').innerHTML = recs.length ? `<p class="hint">Aus Rezepten:</p><div class="chips static">${recs.map((r) => `<span class="chip tag-chip">${esc(r.title)}
       <button type="button" data-recipe="${esc(r.recipe_id)}" aria-label="${esc(r.title)} von der Liste nehmen">×</button></span>`).join('')}</div>` : '';
@@ -1190,6 +1237,11 @@ async function renderShopping(listId) {
     reloading = loadItems(list.id).then((fresh) => { items = fresh; draw(); })
       .catch(() => {}).finally(() => { reloading = null; });
     return reloading;
+  };
+
+  $('#item-sort').onchange = (e) => {
+    try { localStorage.setItem('kochbuch.listSort', e.target.value); } catch { /* privater Modus */ }
+    draw();
   };
 
   $('#list-select').onchange = async (e) => {
@@ -1286,6 +1338,22 @@ async function renderShopping(listId) {
     .subscribe();
   onListVisible = () => { if (document.visibilityState === 'visible') reload(); };
   document.addEventListener('visibilitychange', onListVisible);
+}
+
+function shoppingSort() {
+  try { return localStorage.getItem('kochbuch.listSort') || 'added'; } catch { return 'added'; }
+}
+
+const groupOf = (item) => item.sources?.[0]?.title ?? 'Von Hand';
+
+function sortItems(items, sort) {
+  const list = [...items];
+  if (sort === 'name') list.sort((a, b) => collator.compare(a.name, b.name));
+  if (sort === 'recipe') {
+    list.sort((a, b) => (!a.sources?.length - !b.sources?.length)
+      || collator.compare(groupOf(a), groupOf(b)) || collator.compare(a.name, b.name));
+  }
+  return list;
 }
 
 async function acceptListInvite(token) {
