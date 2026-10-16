@@ -101,13 +101,22 @@ export function mergeInto(item, addition) {
 // Nimmt alles heraus, was ein Rezept beigetragen hat. Einträge, die nur aus diesem Rezept
 // stammen, werden gelöscht; von Hand angelegte bleiben.
 export function removeRecipe(items, recipeId) {
+  return removeSources(items, (s) => s.recipe_id === recipeId);
+}
+
+// Dasselbe für einen einzelnen Plan-Eintrag (ein Rezept kann mehrmals eingeplant sein).
+export function removePlanEntry(items, planId) {
+  return removeSources(items, (s) => s.plan_id === planId);
+}
+
+function removeSources(items, matches) {
   const updates = [];
   const deletes = [];
   for (const item of items) {
     const sources = item.sources ?? [];
-    const own = sources.filter((s) => s.recipe_id === recipeId);
+    const own = sources.filter(matches);
     if (!own.length) continue;
-    const rest = sources.filter((s) => s.recipe_id !== recipeId);
+    const rest = sources.filter((s) => !matches(s));
     if (!rest.length && !item.manual) {
       deletes.push(item.id);
       continue;
