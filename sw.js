@@ -26,7 +26,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== 'GET' || url.origin !== self.location.origin) return;
   event.respondWith(
-    fetch(event.request, { cache: 'no-cache' })
+    fetch(event.request.mode === 'navigate' ? url.href : event.request, { cache: 'no-cache' })
       .then((res) => {
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(event.request, copy));
