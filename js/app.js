@@ -6,6 +6,7 @@ import { suggestRecipes, STAPLES } from './pantry.js';
 import {
   additionsFromPlan, findConflict, mergeInto, removeRecipe, recipesOnList, plannedIds, formatItemQuantity,
 } from './shopping.js';
+import { PRODUCE, MONTHS, seasonOf, inSeason, seasonalRecipes } from './season.js';
 
 const app = document.getElementById('app');
 const nav = document.getElementById('nav');
@@ -125,6 +126,7 @@ async function render() {
     else if (first === 'kochbuch' && id && action) await renderCookbookRecipe(id, action);
     else if (first === 'kochbuch' && id) await renderCookbook(id);
     else if (first === 'kochen') await renderPantry();
+    else if (first === 'saison') await renderSeason();
     else if (first === 'neu') await renderEditor(null);
     else if (first === 'r' && id && action === 'bearbeiten') await renderEditor(id);
     else if (first === 'r' && id) await renderDetail(id);
@@ -256,7 +258,7 @@ const TABS = [
 
 function renderTabbar(first) {
   if (!session) { tabbar.hidden = true; return; }
-  const active = { '': 'list', r: 'list', neu: 'list', kochen: 'pantry', plan: 'plan', einkauf: 'shop', geteilt: 'shared', kochbuch: 'shared', liste: 'shop' }[first || ''];
+  const active = { '': 'list', r: 'list', neu: 'list', kochen: 'pantry', saison: 'pantry', plan: 'plan', einkauf: 'shop', geteilt: 'shared', kochbuch: 'shared', liste: 'shop' }[first || ''];
   tabbar.hidden = false;
   tabbar.innerHTML = TABS.map(([key, href, label]) => `<a href="${href}" class="${key === active ? 'active' : ''}"${key === active ? ' aria-current="page"' : ''}>
     <svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[key]}</svg><span>${label}</span></a>`).join('');
@@ -284,7 +286,7 @@ async function renderPantry() {
     .sort(collator.compare);
 
   app.innerHTML = `
-    
+    ${pantryTabs('kochen')}
     <div class="pantry card-panel">
       <label for="have">Welche Zutaten hast du?</label>
       <div class="import-row">
@@ -350,6 +352,92 @@ async function renderPantry() {
   // Auswahl aus der Vorschlagsliste direkt übernehmen.
   input.oninput = (e) => { if (!e.inputType || e.inputType === 'insertReplacementText') { if (known.includes(input.value)) add(); } };
   $('#staples').onchange = (e) => { state.useStaples = e.target.checked; draw(); };
+  draw();
+}
+
+function pantryTabs(active) {
+  return `<nav class="segmented" aria-label="Was kochen?">
+    <a href="#/kochen" class="${active === 'kochen' ? 'active' : ''}">Meine Zutaten</a>
+    <a href="#/saison" class="${active === 'saison' ? 'active' : ''}">Saison</a></nav>`;
+}
+
+// Saisonkalender: Auswahl bleibt erhalten, solange die App offen ist.
+const seasonState = { month: new Date().getMonth() + 1, storage: false, focus: new Set(), tags: new Set() };
+
+async function renderSeason() {
+  app.innerHTML = '<p class="loading">Lade Rezepte …</p>';
+  const all = await loadRecipes();
+  const tags = [...new Set(all.flatMap((r) => r.tags))].sort(collator.compare);
+  const st = seasonState;
+  for (const t of st.tags) if (!tags.includes(t)) st.tags.delete(t);
+
+  app.innerHTML = `
+    ${pantryTabs('saison')}
+    <div class="month-nav">
+      <button class="icon-btn" id="prev-month" aria-label="Voriger Monat">‹</button>
+      <h1 id="month-name"></h1>
+      <button class="icon-btn" id="next-month" aria-label="Nächster Monat">›</button>
+    </div>
+    <label class="check"><input type="checkbox" id="storage" ${st.storage ? 'checked' : ''}> Lagerware einbeziehen (z. B. Äpfel und Kartoffeln aus dem Lager)</label>
+    <div id="produce"></div>
+    <section class="season-recipes">
+      <h2>Passende Rezepte</h2>
+      ${tags.length ? `<div class="chips static" id="season-tags">${tags.map((t) => `<button type="button" class="chip${st.tags.has(t) ? ' active' : ''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}</div>` : ''}
+      <div id="season-results"></div>
+    </section>
+    <details class="year card-panel">
+      <summary>Ganzes Jahr ansehen</summary>
+      <div class="year-scroll"><table class="year-table">
+        <thead><tr><th></th>${MONTHS.map((m) => `<th scope="col" title="${m}">${m[0]}</th>`).join('')}</tr></thead>
+        ${['Gemüse', 'Obst'].map((kind) => `<tbody><tr><th colspan="13" class="kind">${kind}</th></tr>
+          ${PRODUCE.filter((p) => p.kind === kind).map((p) => `<tr><th scope="row">${esc(p.name)}</th>${MONTHS.map((m, i) => {
+    const s = seasonOf(p, i + 1);
+    return `<td class="${s ?? ''}" title="${esc(p.name)} im ${m}: ${s === 'fresh' ? 'frisch' : s === 'store' ? 'Lagerware' : 'keine Saison'}"></td>`;
+  }).join('')}</tr>`).join('')}</tbody>`).join('')}
+      </table></div>
+      <p class="hint"><span class="legend fresh"></span> frisch aus Deutschland <span class="legend store"></span> Lagerware</p>
+    </details>`;
+
+  const draw = () => {
+    $('#month-name').textContent = MONTHS[st.month - 1];
+    app.querySelectorAll('.year-table thead th').forEach((th, i) => th.classList.toggle('now', i === st.month));
+    const current = inSeason(st.month, { storage: st.storage });
+    for (const name of st.focus) if (!current.some((p) => p.name === name)) st.focus.delete(name);
+    $('#produce').innerHTML = ['Gemüse', 'Obst'].map((kind) => {
+      const items = current.filter((p) => p.kind === kind);
+      return `<h2>${kind}</h2>${items.length ? `<div class="chips static">${items.map((p) => `<button type="button"
+        class="chip produce${st.focus.has(p.name) ? ' active' : ''}${seasonOf(p, st.month) === 'store' ? ' store' : ''}"
+        data-produce="${esc(p.name)}" aria-pressed="${st.focus.has(p.name)}">${esc(p.name)}</button>`).join('')}</div>`
+        : '<p class="hint">Gerade nichts frisch aus Deutschland.</p>'}`;
+    }).join('') + `<p class="hint">${st.focus.size ? 'Es werden nur Rezepte mit der Auswahl gesucht. Tippe erneut, um sie aufzuheben.' : 'Tippe auf Obst oder Gemüse, um nur danach zu suchen.'}</p>`;
+    app.querySelectorAll('[data-produce]').forEach((b) => {
+      b.onclick = () => {
+        const name = b.dataset.produce;
+        if (st.focus.has(name)) st.focus.delete(name); else st.focus.add(name);
+        draw();
+      };
+    });
+
+    const produce = st.focus.size ? current.filter((p) => st.focus.has(p.name)) : current;
+    const hits = seasonalRecipes(all, produce, [...st.tags]);
+    $('#season-results').innerHTML = hits.length ? `<div class="suggestions">${hits.map((h) => `<a class="suggestion" href="#/r/${h.recipe.id}">
+      ${h.recipe.images[0] ? `<img src="${esc(imageUrl(h.recipe.images[0]))}" alt="" loading="lazy">` : '<div class="placeholder" aria-hidden="true">🍲</div>'}
+      <div><h3>${esc(h.recipe.title)}</h3><p class="ok">Saison: ${h.matches.map((p) => esc(p.name)).join(', ')}</p></div></a>`).join('')}</div>`
+      : `<p class="hint">${all.length ? 'Keines deiner Rezepte passt dazu.' : 'Du hast noch keine Rezepte.'}</p>`;
+  };
+
+  const step = (d) => { st.month = ((st.month - 1 + d + 12) % 12) + 1; draw(); };
+  $('#prev-month').onclick = () => step(-1);
+  $('#next-month').onclick = () => step(1);
+  $('#storage').onchange = (e) => { st.storage = e.target.checked; draw(); };
+  app.querySelectorAll('#season-tags [data-tag]').forEach((chip) => {
+    chip.onclick = () => {
+      const t = chip.dataset.tag;
+      if (st.tags.has(t)) st.tags.delete(t); else st.tags.add(t);
+      chip.classList.toggle('active', st.tags.has(t));
+      draw();
+    };
+  });
   draw();
 }
 

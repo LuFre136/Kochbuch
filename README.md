@@ -20,7 +20,7 @@ Kein Build-Schritt nötig, alles sind statische Dateien.
 
 ```sh
 npm start   # lokaler Server auf http://localhost:8080
-npm test    # Tests für Zutaten-Parser, Portionsrechner, Rezept-Import, Zutatensuche und Einkaufslisten
+npm test    # Tests für Zutaten-Parser, Portionsrechner, Rezept-Import, Zutatensuche, Einkaufslisten und Saisonkalender
 ```
 
 Zutaten werden als eine Zeile pro Zutat eingegeben („200 g Mehl“, „½ Bund Petersilie“, „2-3 Zehen Knoblauch“) und als `{ amount, amountMax, unit, name }` gespeichert. So kann die App sie auf eine andere Personenzahl umrechnen.
@@ -34,3 +34,7 @@ Zutaten werden als eine Zeile pro Zutat eingegeben („200 g Mehl“, „½ Bund
 ## Einkaufslisten
 
 Im Plan setzt „Auf die Einkaufsliste“ die Zutaten eines eingeplanten Rezepts (umgerechnet auf die geplante Personenzahl) auf eine Liste. Jeder Eintrag merkt sich, aus welchen Rezepten er stammt. Steht eine Zutat schon offen auf der Liste und passen die Einheiten (gleich oder umrechenbar wie g/kg), fragt die App, ob zusammengerechnet oder ein neuer Eintrag angelegt werden soll. Über die Rezept-Chips oben in der Liste nimmt man alles wieder heraus, was ein Rezept beigetragen hat; von Hand eingetragene Mengen bleiben stehen.
+
+## Saisonkalender
+
+Unter „Was kochen?“ → „Saison“ zeigt die App, welches Obst und Gemüse in Deutschland gerade frisch (oder auf Wunsch als Lagerware) zu haben ist, und darunter die eigenen Rezepte, die davon etwas enthalten. Die Daten stehen in [`js/season.js`](js/season.js) und lassen sich dort ergänzen.

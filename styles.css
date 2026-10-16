@@ -334,3 +334,32 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 0.35); }
 .choices { display: grid; gap: 10px; }
 .choices .check { color: var(--text); font-size: 1rem; }
 .sheet-form p { margin: 0; }
+
+/* Was kochen?: Umschalter Zutaten / Saison */
+.segmented { display: flex; gap: 4px; padding: 4px; margin-bottom: 16px; background: var(--surface-2); border-radius: 999px; }
+.segmented a {
+  flex: 1; text-align: center; padding: 8px 12px; border-radius: 999px;
+  color: var(--muted); font-weight: 600; text-decoration: none;
+}
+.segmented a.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+
+/* Saisonkalender */
+.month-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.month-nav h1 { margin: 0; text-align: center; flex: 1; }
+.month-nav .icon-btn { font-size: 1.8rem; }
+#produce h2 { margin: 16px 0 8px; }
+#produce .chips { margin-bottom: 4px; }
+.chip.produce.store:not(.active) { border-style: dashed; color: var(--muted); }
+.season-recipes h2 { margin: 24px 0 10px; }
+.year { margin-top: 24px; }
+.year summary { cursor: pointer; font-weight: 600; }
+.year-scroll { overflow-x: auto; margin-top: 12px; }
+.year-table { border-collapse: collapse; width: 100%; font-size: 0.8rem; }
+.year-table th { text-align: left; font-weight: 400; padding: 2px 6px 2px 0; white-space: nowrap; }
+.year-table thead th { text-align: center; color: var(--muted); padding: 0 0 4px; }
+.year-table thead th.now { color: var(--accent); font-weight: 700; }
+.year-table th.kind { font-weight: 700; padding-top: 10px; }
+.year-table td { width: 7%; height: 18px; border: 2px solid var(--surface); background: var(--surface-2); border-radius: 4px; }
+.year-table td.fresh, .legend.fresh { background: #5b9e5f; }
+.year-table td.store, .legend.store { background: #c9b98f; }
+.legend { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-left: 6px; }
