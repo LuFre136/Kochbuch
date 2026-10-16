@@ -1,0 +1,476 @@
+import { supabase, isConfigured, IMAGE_BUCKET } from './supabase.js';
+import {
+  parseIngredientText, parseIngredientLine, formatQuantity, ingredientToLine,
+} from './ingredients.js';
+
+const app = document.getElementById('app');
+const nav = document.getElementById('nav');
+
+let session = null;
+let recipes = null; // Cache aller eigenen Rezepte
+let listQuery = '';
+let activeTag = null;
+let recoveringPassword = false;
+
+const collator = new Intl.Collator('de', { sensitivity: 'base' });
+
+// ---------- Hilfsfunktionen ----------
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
+  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+));
+
+const $ = (sel, root = app) => root.querySelector(sel);
+
+function imageUrl(path) {
+  return supabase.storage.from(IMAGE_BUCKET).getPublicUrl(path).data.publicUrl;
+}
+
+function formatMinutes(min) {
+  if (min == null) return '';
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  if (!h) return `${m} Min.`;
+  return m ? `${h} Std. ${m} Min.` : `${h} Std.`;
+}
+
+function safeUrl(url) {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function hostOf(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; }
+}
+
+function toast(message) {
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = message;
+  document.body.append(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+async function loadRecipes(force = false) {
+  if (recipes && !force) return recipes;
+  const { data, error } = await supabase.from('recipes').select('*');
+  if (error) throw error;
+  recipes = data.sort((a, b) => collator.compare(a.title, b.title));
+  return recipes;
+}
+
+// Verkleinert Fotos vor dem Hochladen, damit der kostenlose Speicher lange reicht.
+async function compressImage(file, maxSize = 1600, quality = 0.82) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error(`Bild „${file.name}“ konnte nicht gelesen werden.`));
+      i.src = url;
+    });
+    const scale = Math.min(1, maxSize / Math.max(img.naturalWidth, img.naturalHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(img.naturalWidth * scale);
+    canvas.height = Math.round(img.naturalHeight * scale);
+    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+    return await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+// ---------- Routing ----------
+
+function route() {
+  const hash = location.hash.replace(/^#\/?/, '');
+  return hash.split('/').filter(Boolean).map(decodeURIComponent);
+}
+
+async function render() {
+  if (!isConfigured) return renderSetup();
+  if (recoveringPassword) return renderNewPassword();
+  if (!session) return renderLogin();
+  renderNav();
+  const [first, id, action] = route();
+  try {
+    if (!first) await renderList();
+    else if (first === 'neu') await renderEditor(null);
+    else if (first === 'r' && id && action === 'bearbeiten') await renderEditor(id);
+    else if (first === 'r' && id) await renderDetail(id);
+    else location.hash = '#/';
+  } catch (err) {
+    console.error(err);
+    app.innerHTML = `<div class="notice error"><p>Da ist etwas schiefgelaufen:</p><p>${esc(err.message)}</p>
+      <p><a class="btn" href="#/">Zur Übersicht</a></p></div>`;
+  }
+}
+
+function renderNav() {
+  nav.innerHTML = `
+    <a class="btn primary small" href="#/neu">+ Neues Rezept</a>
+    <button class="btn ghost small" id="logout" title="${esc(session.user.email)}">Abmelden</button>`;
+  $('#logout', nav).onclick = async () => {
+    await supabase.auth.signOut();
+  };
+}
+
+// ---------- Ansichten ----------
+
+function renderSetup() {
+  nav.innerHTML = '';
+  app.innerHTML = `<div class="notice">
+    <h1>Fast fertig</h1>
+    <p>Die App ist noch nicht mit Supabase verbunden. Trage die Project URL und den
+    Publishable Key in <code>js/config.js</code> ein (siehe README).</p></div>`;
+}
+
+function renderLogin() {
+  nav.innerHTML = '';
+  app.innerHTML = `
+    <form class="auth card-panel" id="auth">
+      <h1>Anmelden</h1>
+      <label>E-Mail <input type="email" name="email" autocomplete="email" required></label>
+      <label>Passwort <input type="password" name="password" autocomplete="current-password" minlength="6" required></label>
+      <div class="row">
+        <button class="btn primary" name="mode" value="login">Anmelden</button>
+        <button class="btn" name="mode" value="signup">Registrieren</button>
+      </div>
+      <button type="button" class="link" id="forgot">Passwort vergessen?</button>
+      <p class="hint" id="msg"></p>
+    </form>`;
+  const form = $('#auth');
+  const msg = $('#msg');
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const mode = e.submitter?.value || 'login';
+    const email = form.email.value.trim();
+    const password = form.password.value;
+    msg.textContent = '';
+    form.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+    try {
+      if (mode === 'signup') {
+        const { data, error } = await supabase.auth.signUp({
+          email, password, options: { emailRedirectTo: location.origin + location.pathname },
+        });
+        if (error) throw error;
+        if (!data.session) msg.textContent = 'Fast geschafft: Bitte bestätige deine E-Mail-Adresse über den Link in der Mail und melde dich dann an.';
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+      }
+    } catch (err) {
+      msg.textContent = err.message === 'Invalid login credentials'
+        ? 'E-Mail oder Passwort stimmt nicht.' : err.message;
+    } finally {
+      form.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+    }
+  };
+  $('#forgot').onclick = async () => {
+    const email = form.email.value.trim();
+    if (!email) { msg.textContent = 'Gib zuerst deine E-Mail-Adresse ein.'; return; }
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: location.origin + location.pathname,
+    });
+    msg.textContent = error ? error.message : 'Wir haben dir eine Mail zum Zurücksetzen geschickt.';
+  };
+}
+
+function renderNewPassword() {
+  nav.innerHTML = '';
+  app.innerHTML = `
+    <form class="auth card-panel" id="pw">
+      <h1>Neues Passwort</h1>
+      <label>Neues Passwort <input type="password" name="password" autocomplete="new-password" minlength="6" required></label>
+      <button class="btn primary">Speichern</button>
+      <p class="hint" id="msg"></p>
+    </form>`;
+  $('#pw').onsubmit = async (e) => {
+    e.preventDefault();
+    const { error } = await supabase.auth.updateUser({ password: e.target.password.value });
+    if (error) { $('#msg').textContent = error.message; return; }
+    recoveringPassword = false;
+    toast('Passwort geändert');
+    render();
+  };
+}
+
+async function renderList() {
+  app.innerHTML = '<p class="loading">Lade Rezepte …</p>';
+  const all = await loadRecipes();
+  if (!all.length) {
+    app.innerHTML = `<div class="empty">
+      <h1>Noch keine Rezepte</h1>
+      <p>Lege dein erstes Rezept an.</p>
+      <a class="btn primary" href="#/neu">+ Neues Rezept</a></div>`;
+    return;
+  }
+  const tags = [...new Set(all.flatMap((r) => r.tags))].sort(collator.compare);
+  if (activeTag && !tags.includes(activeTag)) activeTag = null;
+  app.innerHTML = `
+    <div class="search">
+      <input type="search" id="q" placeholder="Titel, Beschreibung oder Tag suchen" value="${esc(listQuery)}" aria-label="Rezepte durchsuchen">
+    </div>
+    ${tags.length ? `<div class="chips">${tags.map((t) => `<button class="chip${t === activeTag ? ' active' : ''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}</div>` : ''}
+    <div id="results" class="grid"></div>`;
+
+  const results = $('#results');
+  const draw = () => {
+    const q = listQuery.trim().toLowerCase();
+    const shown = all.filter((r) => (!activeTag || r.tags.includes(activeTag))
+      && (!q || [r.title, r.description, ...r.tags].some((s) => s.toLowerCase().includes(q))));
+    results.innerHTML = shown.length ? shown.map(recipeCard).join('')
+      : '<p class="hint">Keine passenden Rezepte gefunden.</p>';
+  };
+  $('#q').oninput = (e) => { listQuery = e.target.value; draw(); };
+  app.querySelectorAll('.chip').forEach((chip) => {
+    chip.onclick = () => {
+      activeTag = activeTag === chip.dataset.tag ? null : chip.dataset.tag;
+      app.querySelectorAll('.chip').forEach((c) => c.classList.toggle('active', c.dataset.tag === activeTag));
+      draw();
+    };
+  });
+  draw();
+}
+
+function recipeCard(r) {
+  const img = r.images[0]
+    ? `<img src="${esc(imageUrl(r.images[0]))}" alt="" loading="lazy">`
+    : '<div class="placeholder" aria-hidden="true">🍲</div>';
+  const meta = [r.total_minutes != null ? `⏱ ${formatMinutes(r.total_minutes)}` : '', ...r.tags.slice(0, 3)]
+    .filter(Boolean).map((m) => `<span>${esc(m)}</span>`).join('');
+  return `<a class="card" href="#/r/${r.id}">
+    ${img}
+    <div class="card-body"><h2>${esc(r.title)}</h2><div class="meta">${meta}</div></div>
+  </a>`;
+}
+
+async function renderDetail(id) {
+  const r = (await loadRecipes()).find((x) => x.id === id);
+  if (!r) {
+    app.innerHTML = '<div class="notice"><p>Dieses Rezept gibt es nicht (mehr).</p><a class="btn" href="#/">Zur Übersicht</a></div>';
+    return;
+  }
+  window.scrollTo(0, 0);
+  let servings = r.servings;
+  const sources = r.sources.map((u) => [u, safeUrl(u)]).filter(([, href]) => href);
+
+  app.innerHTML = `
+    <article class="recipe">
+      <a class="back" href="#/">← Alle Rezepte</a>
+      ${r.images.length ? `<div class="gallery">${r.images.map((p) => `<img src="${esc(imageUrl(p))}" alt="">`).join('')}</div>` : ''}
+      <h1>${esc(r.title)}</h1>
+      ${r.description ? `<p class="lead">${esc(r.description)}</p>` : ''}
+      ${r.tags.length ? `<div class="chips static">${r.tags.map((t) => `<span class="chip">${esc(t)}</span>`).join('')}</div>` : ''}
+      ${r.total_minutes != null || r.cook_minutes != null ? `<dl class="times">
+        ${r.total_minutes != null ? `<div><dt>Gesamtzeit</dt><dd>${formatMinutes(r.total_minutes)}</dd></div>` : ''}
+        ${r.cook_minutes != null ? `<div><dt>Koch-/Backzeit</dt><dd>${formatMinutes(r.cook_minutes)}</dd></div>` : ''}
+      </dl>` : ''}
+
+      ${r.ingredients.length ? `<section>
+        <div class="section-head">
+          <h2>Zutaten</h2>
+          <div class="stepper" role="group" aria-label="Personenzahl">
+            <button class="btn small" data-d="-1" aria-label="Weniger Personen">−</button>
+            <span id="srv" aria-live="polite"></span>
+            <button class="btn small" data-d="1" aria-label="Mehr Personen">+</button>
+          </div>
+        </div>
+        <ul class="ingredients" id="ing"></ul>
+      </section>` : ''}
+
+      ${r.steps.length ? `<section><h2>Zubereitung</h2>
+        <ol class="steps">${r.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol></section>` : ''}
+
+      ${r.notes ? `<section><h2>Notizen</h2><p class="notes">${esc(r.notes)}</p></section>` : ''}
+
+      ${sources.length ? `<section><h2>Quellen</h2><ul class="sources">
+        ${sources.map(([u, href]) => `<li><a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(hostOf(u))}</a></li>`).join('')}
+      </ul></section>` : ''}
+
+      <div class="actions">
+        <a class="btn" href="#/r/${r.id}/bearbeiten">Bearbeiten</a>
+        <button class="btn danger" id="del">Löschen</button>
+      </div>
+    </article>`;
+
+  const ingList = $('#ing');
+  const drawIngredients = () => {
+    if (!ingList) return;
+    $('#srv').textContent = `${servings} ${servings === 1 ? 'Person' : 'Personen'}`;
+    const factor = servings / r.servings;
+    ingList.innerHTML = r.ingredients.map((i) => `<li><span class="qty">${esc(formatQuantity(i, factor))}</span><span>${esc(i.name)}</span></li>`).join('');
+  };
+  app.querySelectorAll('.stepper button').forEach((b) => {
+    b.onclick = () => {
+      servings = Math.max(1, Math.min(100, servings + Number(b.dataset.d)));
+      drawIngredients();
+    };
+  });
+  drawIngredients();
+
+  $('#del').onclick = async () => {
+    if (!confirm(`„${r.title}“ wirklich löschen?`)) return;
+    const { error } = await supabase.from('recipes').delete().eq('id', r.id);
+    if (error) { toast(error.message); return; }
+    if (r.images.length) await supabase.storage.from(IMAGE_BUCKET).remove(r.images);
+    recipes = recipes.filter((x) => x.id !== r.id);
+    toast('Rezept gelöscht');
+    location.hash = '#/';
+  };
+}
+
+async function renderEditor(id) {
+  const existing = id ? (await loadRecipes()).find((x) => x.id === id) : null;
+  if (id && !existing) { location.hash = '#/'; return; }
+  window.scrollTo(0, 0);
+  const r = existing || {
+    title: '', description: '', tags: [], servings: 2, total_minutes: null, cook_minutes: null,
+    ingredients: [], steps: [], sources: [], notes: '', images: [],
+  };
+  let keptImages = [...r.images];
+  let newFiles = [];
+
+  app.innerHTML = `
+    <form class="editor" id="editor">
+      <a class="back" href="${existing ? `#/r/${existing.id}` : '#/'}">← Abbrechen</a>
+      <h1>${existing ? 'Rezept bearbeiten' : 'Neues Rezept'}</h1>
+
+      <label>Titel <input name="title" required maxlength="200" value="${esc(r.title)}"></label>
+      <label>Kurze Beschreibung <textarea name="description" rows="2">${esc(r.description)}</textarea></label>
+      <label>Tags <input name="tags" value="${esc(r.tags.join(', '))}" placeholder="z. B. vegetarisch, schnell, Pasta">
+        <small>Mit Komma trennen</small></label>
+
+      <div class="cols">
+        <label>Personen <input name="servings" type="number" min="1" max="100" required value="${r.servings}"></label>
+        <label>Gesamtzeit (Min.) <input name="total_minutes" type="number" min="0" inputmode="numeric" value="${r.total_minutes ?? ''}"></label>
+        <label>Koch-/Backzeit (Min.) <input name="cook_minutes" type="number" min="0" inputmode="numeric" value="${r.cook_minutes ?? ''}"></label>
+      </div>
+
+      <label>Zutaten <textarea name="ingredients" rows="8" placeholder="200 g Mehl&#10;2 Eier&#10;1 Prise Salz">${esc(r.ingredients.map(ingredientToLine).join('\n'))}</textarea>
+        <small>Eine Zutat pro Zeile, Menge zuerst. Die Menge bezieht sich auf die Personenzahl oben.</small></label>
+      <ul class="parse-preview" id="preview"></ul>
+
+      <label>Zubereitung <textarea name="steps" rows="8" placeholder="Ein Schritt pro Zeile">${esc(r.steps.join('\n'))}</textarea></label>
+      <label>Notizen <textarea name="notes" rows="3">${esc(r.notes)}</textarea></label>
+      <label>Quellen <textarea name="sources" rows="2" placeholder="https://… (ein Link pro Zeile)">${esc(r.sources.join('\n'))}</textarea></label>
+
+      <fieldset>
+        <legend>Bilder</legend>
+        <div class="thumbs" id="thumbs"></div>
+        <label class="btn file">Bilder hinzufügen<input type="file" accept="image/*" multiple id="files" hidden></label>
+      </fieldset>
+
+      <div class="actions">
+        <button class="btn primary" id="save">Speichern</button>
+      </div>
+    </form>`;
+
+  const form = $('#editor');
+  const preview = $('#preview');
+  const drawPreview = () => {
+    const items = parseIngredientText(form.ingredients.value);
+    preview.innerHTML = items.map((i) => `<li><span class="qty">${esc(formatQuantity(i)) || '–'}</span><span>${esc(i.name)}</span></li>`).join('');
+  };
+  form.ingredients.oninput = drawPreview;
+  drawPreview();
+
+  const thumbs = $('#thumbs');
+  const drawThumbs = () => {
+    thumbs.innerHTML = [
+      ...keptImages.map((p, i) => `<div class="thumb"><img src="${esc(imageUrl(p))}" alt=""><button type="button" data-kept="${i}" aria-label="Bild entfernen">×</button></div>`),
+      ...newFiles.map((f, i) => `<div class="thumb"><img src="${f.preview}" alt=""><button type="button" data-new="${i}" aria-label="Bild entfernen">×</button></div>`),
+    ].join('');
+    thumbs.querySelectorAll('button').forEach((b) => {
+      b.onclick = () => {
+        if (b.dataset.kept != null) keptImages.splice(Number(b.dataset.kept), 1);
+        else URL.revokeObjectURL(newFiles.splice(Number(b.dataset.new), 1)[0].preview);
+        drawThumbs();
+      };
+    });
+  };
+  $('#files').onchange = (e) => {
+    newFiles.push(...[...e.target.files].map((file) => ({ file, preview: URL.createObjectURL(file) })));
+    e.target.value = '';
+    drawThumbs();
+  };
+  drawThumbs();
+
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const save = $('#save');
+    save.disabled = true;
+    save.textContent = 'Speichere …';
+    const recipeId = existing?.id || crypto.randomUUID();
+    const uploaded = [];
+    try {
+      for (const { file } of newFiles) {
+        const blob = await compressImage(file);
+        const path = `${session.user.id}/${recipeId}/${crypto.randomUUID()}.jpg`;
+        const { error } = await supabase.storage.from(IMAGE_BUCKET).upload(path, blob, { contentType: 'image/jpeg' });
+        if (error) throw error;
+        uploaded.push(path);
+      }
+      const num = (v) => (v === '' ? null : Math.max(0, Math.round(Number(v))));
+      const lines = (v) => v.split('\n').map((s) => s.trim()).filter(Boolean);
+      const row = {
+        id: recipeId,
+        title: form.title.value.trim(),
+        description: form.description.value.trim(),
+        tags: [...new Set(form.tags.value.split(',').map((t) => t.trim()).filter(Boolean))],
+        servings: Math.max(1, num(form.servings.value) || 1),
+        total_minutes: num(form.total_minutes.value),
+        cook_minutes: num(form.cook_minutes.value),
+        ingredients: lines(form.ingredients.value).map(parseIngredientLine),
+        steps: lines(form.steps.value),
+        sources: lines(form.sources.value),
+        notes: form.notes.value.trim(),
+        images: [...keptImages, ...uploaded],
+      };
+      const { data, error } = await supabase.from('recipes').upsert(row).select().single();
+      if (error) throw error;
+
+      const removed = existing ? existing.images.filter((p) => !keptImages.includes(p)) : [];
+      if (removed.length) await supabase.storage.from(IMAGE_BUCKET).remove(removed);
+      newFiles.forEach((f) => URL.revokeObjectURL(f.preview));
+
+      if (recipes) {
+        recipes = [...recipes.filter((x) => x.id !== data.id), data].sort((a, b) => collator.compare(a.title, b.title));
+      }
+      toast('Gespeichert');
+      location.hash = `#/r/${data.id}`;
+    } catch (err) {
+      if (uploaded.length) await supabase.storage.from(IMAGE_BUCKET).remove(uploaded);
+      toast(`Speichern fehlgeschlagen: ${err.message}`);
+      save.disabled = false;
+      save.textContent = 'Speichern';
+    }
+  };
+}
+
+// ---------- Start ----------
+
+window.addEventListener('hashchange', render);
+
+if (isConfigured) {
+  supabase.auth.onAuthStateChange((event, newSession) => {
+    if (event === 'INITIAL_SESSION') return; // wird unten per getSession behandelt
+    const userChanged = newSession?.user?.id !== session?.user?.id;
+    session = newSession;
+    if (event === 'PASSWORD_RECOVERY') recoveringPassword = true;
+    if (userChanged) recipes = null;
+    // Nur bei echten Wechseln neu zeichnen, nicht beim stillen Token-Refresh.
+    if (userChanged || event === 'PASSWORD_RECOVERY' || event === 'SIGNED_OUT') setTimeout(render);
+  });
+  const { data } = await supabase.auth.getSession();
+  session = data.session;
+}
+render();
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
