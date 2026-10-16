@@ -191,3 +191,32 @@ legend { font-weight: 600; padding: 0 4px; }
 .import-row { display: flex; gap: 8px; }
 .import-row input { flex: 1; min-width: 0; }
 .import .hint:empty { display: none; }
+
+.tabs { display: flex; gap: 4px; padding: 4px; margin-bottom: 16px; background: var(--surface-2); border-radius: 999px; }
+.tabs a {
+  flex: 1; text-align: center; padding: 8px 10px; border-radius: 999px;
+  color: var(--muted); font-weight: 600; text-decoration: none; font-size: 0.9rem; white-space: nowrap;
+}
+.tabs a.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+
+.pantry { display: grid; gap: 10px; margin-bottom: 20px; }
+.pantry > label:first-child { font-weight: 600; }
+.pantry .chips { margin: 0; }
+.pantry .chips:empty { display: none; }
+.check { display: flex; align-items: flex-start; gap: 8px; font-weight: 400; font-size: 0.9rem; color: var(--muted); }
+.check input { width: auto; margin-top: 3px; }
+
+#suggestions h2 { margin: 20px 0 10px; }
+.suggestions { display: grid; gap: 10px; }
+.suggestion {
+  display: grid; grid-template-columns: 72px 1fr; gap: 12px; align-items: center;
+  padding: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  color: inherit; text-decoration: none;
+}
+.suggestion img, .suggestion .placeholder { width: 72px; height: 72px; object-fit: cover; border-radius: 10px; }
+.suggestion .placeholder { display: grid; place-items: center; font-size: 1.8rem; background: var(--surface-2); }
+.suggestion h3 { margin: 0; font-size: 1rem; }
+.suggestion p { margin: 2px 0 0; font-size: 0.875rem; }
+.suggestion .ok { color: #2f7a3a; }
+.suggestion .missing { color: var(--muted); }
+@media (prefers-color-scheme: dark) { .suggestion .ok { color: #7cc78a; } }

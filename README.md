@@ -18,7 +18,7 @@ Kein Build-Schritt nötig, alles sind statische Dateien.
 
 ```sh
 npm start   # lokaler Server auf http://localhost:8080
-npm test    # Tests für Zutaten-Parser, Portionsrechner und Rezept-Import
+npm test    # Tests für Zutaten-Parser, Portionsrechner, Rezept-Import und Zutatensuche
 ```
 
 Zutaten werden als eine Zeile pro Zutat eingegeben („200 g Mehl“, „½ Bund Petersilie“, „2-3 Zehen Knoblauch“) und als `{ amount, amountMax, unit, name }` gespeichert. So kann die App sie auf eine andere Personenzahl umrechnen.
