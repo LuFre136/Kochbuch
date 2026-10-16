@@ -1,6 +1,6 @@
 // Einfacher Service Worker: macht die App installierbar und hält die App-Dateien
 // für schlechte Verbindungen vor. Daten von Supabase werden nicht zwischengespeichert.
-const CACHE = 'kochbuch-v5';
+const CACHE = 'kochbuch-v6';
 const SHELL = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
   'js/app.js', 'js/supabase.js', 'js/config.js', 'js/ingredients.js', 'js/pantry.js',
@@ -20,11 +20,13 @@ self.addEventListener('activate', (event) => {
 });
 
 // Netzwerk zuerst, damit Updates sofort ankommen; Cache nur als Rückfall.
+// "no-cache" fragt bei GitHub Pages nach, ob sich die Datei geändert hat, statt
+// bis zu 10 Minuten eine alte Fassung aus dem Browser-Cache zu nehmen.
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== 'GET' || url.origin !== self.location.origin) return;
   event.respondWith(
-    fetch(event.request)
+    fetch(event.request.mode === 'navigate' ? url.href : event.request, { cache: 'no-cache' })
       .then((res) => {
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(event.request, copy));
