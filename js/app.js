@@ -58,7 +58,7 @@ function toast(message) {
 
 async function loadRecipes(force = false) {
   if (recipes && !force) return recipes;
-  const { data, error } = await supabase.from('recipes').select('*');
+  const { data, error } = await supabase.from('recipes').select('*').eq('owner_id', session.user.id);
   if (error) throw error;
   recipes = data.sort((a, b) => collator.compare(a.title, b.title));
   return recipes;
@@ -95,16 +95,31 @@ function route() {
 async function render() {
   if (!isConfigured) return renderSetup();
   if (recoveringPassword) return renderNewPassword();
-  if (!session) return renderLogin();
-  renderNav();
   const [first, id, action] = route();
-  try {
+  // Geteilte Einzelrezepte kann man auch ohne Konto ansehen.
+  if (first === 'teilen' && id) {
+    renderNav();
+    return guarded(() => renderSharedLink(id));
+  }
+  if (!session) return renderLogin(first === 'einladung' ? 'Melde dich an oder registriere dich, um das geteilte Kochbuch zu sehen.' : '');
+  renderNav();
+  return guarded(async () => {
     if (!first) await renderList();
+    else if (first === 'geteilt') await renderSharing();
+    else if (first === 'einladung' && id) await acceptInvite(id);
+    else if (first === 'kochbuch' && id && action) await renderCookbookRecipe(id, action);
+    else if (first === 'kochbuch' && id) await renderCookbook(id);
     else if (first === 'kochen') await renderPantry();
     else if (first === 'neu') await renderEditor(null);
     else if (first === 'r' && id && action === 'bearbeiten') await renderEditor(id);
     else if (first === 'r' && id) await renderDetail(id);
     else location.hash = '#/';
+  });
+}
+
+async function guarded(fn) {
+  try {
+    await fn();
   } catch (err) {
     console.error(err);
     app.innerHTML = `<div class="notice error"><p>Da ist etwas schiefgelaufen:</p><p>${esc(err.message)}</p>
@@ -113,6 +128,11 @@ async function render() {
 }
 
 function renderNav() {
+  if (!session) {
+    nav.innerHTML = '<button class="btn small" id="login">Anmelden</button>';
+    $('#login', nav).onclick = () => renderLogin();
+    return;
+  }
   nav.innerHTML = `
     <a class="btn primary small" href="#/neu">+ Neues Rezept</a>
     <button class="btn ghost small" id="logout" title="${esc(session.user.email)}">Abmelden</button>`;
@@ -131,11 +151,12 @@ function renderSetup() {
     Publishable Key in <code>js/config.js</code> ein (siehe README).</p></div>`;
 }
 
-function renderLogin() {
+function renderLogin(hint = '') {
   nav.innerHTML = '';
   app.innerHTML = `
     <form class="auth card-panel" id="auth">
       <h1>Anmelden</h1>
+      ${hint ? `<p class="hint">${esc(hint)}</p>` : ''}
       <label>E-Mail <input type="email" name="email" autocomplete="email" required></label>
       <label>Passwort <input type="password" name="password" autocomplete="current-password" minlength="6" required></label>
       <div class="row">
@@ -203,8 +224,9 @@ function renderNewPassword() {
 
 function tabs(active) {
   return `<nav class="tabs" aria-label="Ansicht">
-    <a href="#/" class="${active === 'list' ? 'active' : ''}">Alle Rezepte</a>
-    <a href="#/kochen" class="${active === 'pantry' ? 'active' : ''}">Was kann ich kochen?</a>
+    <a href="#/" class="${active === 'list' ? 'active' : ''}">Rezepte</a>
+    <a href="#/kochen" class="${active === 'pantry' ? 'active' : ''}">Was kochen?</a>
+    <a href="#/geteilt" class="${active === 'shared' ? 'active' : ''}">Geteilt</a>
   </nav>`;
 }
 
@@ -338,13 +360,13 @@ async function renderList() {
   draw();
 }
 
-function recipeCard(r) {
+function recipeCard(r, href = `#/r/${r.id}`) {
   const img = r.images[0]
     ? `<img src="${esc(imageUrl(r.images[0]))}" alt="" loading="lazy">`
     : '<div class="placeholder" aria-hidden="true">🍲</div>';
   const meta = [r.total_minutes != null ? `⏱ ${formatMinutes(r.total_minutes)}` : '', ...r.tags.slice(0, 3)]
     .filter(Boolean).map((m) => `<span>${esc(m)}</span>`).join('');
-  return `<a class="card" href="#/r/${r.id}">
+  return `<a class="card" href="${href}">
     ${img}
     <div class="card-body"><h2>${esc(r.title)}</h2><div class="meta">${meta}</div></div>
   </a>`;
@@ -356,13 +378,20 @@ async function renderDetail(id) {
     app.innerHTML = '<div class="notice"><p>Dieses Rezept gibt es nicht (mehr).</p><a class="btn" href="#/">Zur Übersicht</a></div>';
     return;
   }
+  showRecipe(r, { own: true, back: '#/', backLabel: 'Alle Rezepte' });
+}
+
+// Zeigt ein Rezept an. Eigene Rezepte kann man bearbeiten, teilen und löschen,
+// fremde (aus einem Teilen-Link oder einem freigegebenen Kochbuch) ins eigene Kochbuch übernehmen.
+function showRecipe(r, { own, back, backLabel, from = '' }) {
   window.scrollTo(0, 0);
   let servings = r.servings;
   const sources = r.sources.map((u) => [u, safeUrl(u)]).filter(([, href]) => href);
 
   app.innerHTML = `
     <article class="recipe">
-      <a class="back" href="#/">← Alle Rezepte</a>
+      ${back ? `<a class="back" href="${back}">← ${esc(backLabel)}</a>` : ''}
+      ${from ? `<p class="hint from">${esc(from)}</p>` : ''}
       ${r.images.length ? `<div class="gallery">${r.images.map((p) => `<img src="${esc(imageUrl(p))}" alt="">`).join('')}</div>` : ''}
       <h1>${esc(r.title)}</h1>
       ${r.description ? `<p class="lead">${esc(r.description)}</p>` : ''}
@@ -393,9 +422,13 @@ async function renderDetail(id) {
         ${sources.map(([u, href]) => `<li><a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(hostOf(u))}</a></li>`).join('')}
       </ul></section>` : ''}
 
-      <div class="actions">
+      <div class="actions">${own ? `
         <a class="btn" href="#/r/${r.id}/bearbeiten">Bearbeiten</a>
-        <button class="btn danger" id="del">Löschen</button>
+        <button class="btn" id="share">Teilen</button>
+        ${r.share_token ? '<button class="btn ghost" id="unshare">Teilen beenden</button>' : ''}
+        <button class="btn danger" id="del">Löschen</button>` : session
+    ? '<button class="btn primary" id="copy">In mein Kochbuch übernehmen</button>'
+    : '<button class="btn primary" id="login-copy">Anmelden, um das Rezept zu übernehmen</button>'}
       </div>
     </article>`;
 
@@ -413,6 +446,38 @@ async function renderDetail(id) {
     };
   });
   drawIngredients();
+
+  if (!own) {
+    if (session) $('#copy').onclick = (e) => copyRecipe(r, e.target);
+    else $('#login-copy').onclick = () => renderLogin('Melde dich an oder registriere dich. Danach kannst du das Rezept übernehmen.');
+    return;
+  }
+
+  $('#share').onclick = async () => {
+    try {
+      if (!r.share_token) {
+        const token = crypto.randomUUID();
+        const { error } = await supabase.from('recipes').update({ share_token: token }).eq('id', r.id);
+        if (error) throw error;
+        r.share_token = token;
+      }
+      await shareLink(appUrl(`teilen/${r.share_token}`), r.title);
+      showRecipe(r, { own, back, backLabel });
+    } catch (err) {
+      toast(`Teilen fehlgeschlagen: ${err.message}`);
+    }
+  };
+  const unshare = $('#unshare');
+  if (unshare) {
+    unshare.onclick = async () => {
+      if (!confirm('Der bisherige Link funktioniert danach nicht mehr. Teilen beenden?')) return;
+      const { error } = await supabase.from('recipes').update({ share_token: null }).eq('id', r.id);
+      if (error) { toast(error.message); return; }
+      r.share_token = null;
+      toast('Link deaktiviert');
+      showRecipe(r, { own, back, backLabel });
+    };
+  }
 
   $('#del').onclick = async () => {
     if (!confirm(`„${r.title}“ wirklich löschen?`)) return;
@@ -626,6 +691,253 @@ async function renderEditor(id) {
   };
 }
 
+// ---------- Teilen ----------
+
+function appUrl(path) {
+  return `${location.origin}${location.pathname}#/${path}`;
+}
+
+// Öffnet auf dem iPhone das Teilen-Menü (WhatsApp, Nachrichten …), sonst wird der Link kopiert.
+async function shareLink(url, title) {
+  if (navigator.share) {
+    try {
+      await navigator.share({ title, url });
+      return;
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+    }
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    toast('Link kopiert');
+  } catch {
+    prompt('Link zum Kopieren:', url);
+  }
+}
+
+// Kopiert ein fremdes Rezept samt Bildern ins eigene Kochbuch.
+async function copyRecipe(r, button) {
+  button.disabled = true;
+  button.textContent = 'Übernehme …';
+  const id = crypto.randomUUID();
+  const uploaded = [];
+  try {
+    for (const p of r.images) {
+      const res = await fetch(imageUrl(p));
+      if (!res.ok) continue;
+      const blob = await res.blob();
+      const path = `${session.user.id}/${id}/${crypto.randomUUID()}.jpg`;
+      const { error } = await supabase.storage.from(IMAGE_BUCKET).upload(path, blob, { contentType: blob.type || 'image/jpeg' });
+      if (error) throw error;
+      uploaded.push(path);
+    }
+    const row = {
+      id,
+      title: r.title,
+      description: r.description,
+      tags: r.tags,
+      servings: r.servings,
+      total_minutes: r.total_minutes,
+      cook_minutes: r.cook_minutes,
+      ingredients: r.ingredients,
+      steps: r.steps,
+      sources: r.sources,
+      notes: r.notes,
+      images: uploaded,
+    };
+    const { data, error } = await supabase.from('recipes').insert(row).select().single();
+    if (error) throw error;
+    if (recipes) recipes = [...recipes, data].sort((a, b) => collator.compare(a.title, b.title));
+    toast('In dein Kochbuch übernommen');
+    location.hash = `#/r/${data.id}`;
+  } catch (err) {
+    if (uploaded.length) await supabase.storage.from(IMAGE_BUCKET).remove(uploaded);
+    toast(`Übernehmen fehlgeschlagen: ${err.message}`);
+    button.disabled = false;
+    button.textContent = 'In mein Kochbuch übernehmen';
+  }
+}
+
+async function renderSharedLink(token) {
+  app.innerHTML = '<p class="loading">Lade Rezept …</p>';
+  const { data, error } = await supabase.rpc('get_shared_recipe', { p_token: token });
+  if (error) throw error;
+  const r = data?.[0];
+  if (!r) {
+    app.innerHTML = `<div class="notice"><p>Dieses Rezept wird nicht mehr geteilt.</p>
+      ${session ? '<a class="btn" href="#/">Zu meinen Rezepten</a>' : ''}</div>`;
+    return;
+  }
+  if (session && r.owner_id === session.user.id) {
+    showRecipe(r, { own: false, back: `#/r/${r.id}`, backLabel: 'Zu deinem Rezept', from: 'So sehen andere dein geteiltes Rezept.' });
+    $('.actions').innerHTML = '';
+    return;
+  }
+  showRecipe(r, { own: false, back: session ? '#/' : '', backLabel: 'Meine Rezepte', from: 'Geteiltes Rezept' });
+}
+
+async function loadPeople() {
+  const { data, error } = await supabase.rpc('cookbook_people');
+  if (error) throw error;
+  const me = session.user.id;
+  return {
+    readers: data.filter((p) => p.owner_id === me),
+    owners: data.filter((p) => p.reader_id === me),
+  };
+}
+
+async function renderSharing() {
+  app.innerHTML = `${tabs('shared')}<p class="loading">Lade …</p>`;
+  const [own, people, invite] = await Promise.all([
+    loadRecipes(),
+    loadPeople(),
+    supabase.from('cookbook_invites').select('token').maybeSingle(),
+  ]);
+  if (invite.error) throw invite.error;
+  const token = invite.data?.token;
+  const sharedRecipes = own.filter((r) => r.share_token);
+  const { readers, owners } = people;
+
+  app.innerHTML = `
+    ${tabs('shared')}
+    <section class="card-panel share-section">
+      <h2>Mit mir geteilte Kochbücher</h2>
+      ${owners.length ? `<ul class="people">${owners.map((o) => `<li>
+          <a href="#/kochbuch/${o.owner_id}">Kochbuch von ${esc(o.owner_email)}</a>
+          <button class="link danger-link" data-leave="${o.owner_id}">Verlassen</button>
+        </li>`).join('')}</ul>`
+        : '<p class="hint">Noch keine. Wenn dir jemand einen Einladungslink schickt, erscheint sein Kochbuch hier.</p>'}
+    </section>
+
+    <section class="card-panel share-section">
+      <h2>Mein Kochbuch freigeben</h2>
+      <p class="hint">Wer den Einladungslink öffnet und ein Konto hat, kann alle deine Rezepte ansehen und übernehmen, aber nichts ändern.</p>
+      ${token ? `<div class="row">
+          <button class="btn primary" id="invite-share">Einladungslink teilen</button>
+          <button class="btn ghost" id="invite-reset">Neuen Link erzeugen</button>
+        </div>
+        <p class="hint">Ein neuer Link macht den alten ungültig. Wer schon Zugriff hat, behält ihn.</p>`
+        : '<button class="btn primary" id="invite-create">Einladungslink erstellen</button>'}
+      <h3>Lesezugriff haben</h3>
+      ${readers.length ? `<ul class="people">${readers.map((p) => `<li>
+          <span>${esc(p.reader_email)}</span>
+          <button class="link danger-link" data-remove="${p.reader_id}">Entfernen</button>
+        </li>`).join('')}</ul>` : '<p class="hint">Noch niemand.</p>'}
+    </section>
+
+    <section class="card-panel share-section">
+      <h2>Einzeln geteilte Rezepte</h2>
+      ${sharedRecipes.length ? `<ul class="people">${sharedRecipes.map((r) => `<li>
+          <a href="#/r/${r.id}">${esc(r.title)}</a>
+          <button class="link" data-share="${r.id}">Link teilen</button>
+        </li>`).join('')}</ul>`
+        : '<p class="hint">Öffne ein Rezept und tippe auf „Teilen“, um es per Link zu verschicken.</p>'}
+    </section>`;
+
+  const createInvite = async (reset) => {
+    const query = reset
+      ? supabase.from('cookbook_invites').update({ token: crypto.randomUUID() }).eq('owner_id', session.user.id).select('token').single()
+      : supabase.from('cookbook_invites').insert({}).select('token').single();
+    const { data, error } = await query;
+    if (error) { toast(error.message); return; }
+    await shareLink(appUrl(`einladung/${data.token}`), 'Mein Kochbuch');
+    renderSharing();
+  };
+  const byId = (id) => app.querySelector(id);
+  if (byId('#invite-create')) byId('#invite-create').onclick = () => createInvite(false);
+  if (byId('#invite-share')) byId('#invite-share').onclick = () => shareLink(appUrl(`einladung/${token}`), 'Mein Kochbuch');
+  if (byId('#invite-reset')) {
+    byId('#invite-reset').onclick = () => {
+      if (confirm('Der bisherige Einladungslink funktioniert danach nicht mehr. Fortfahren?')) createInvite(true);
+    };
+  }
+  app.querySelectorAll('[data-remove]').forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm('Lesezugriff entfernen?')) return;
+      const { error } = await supabase.from('cookbook_readers').delete()
+        .eq('owner_id', session.user.id).eq('reader_id', b.dataset.remove);
+      if (error) toast(error.message); else renderSharing();
+    };
+  });
+  app.querySelectorAll('[data-leave]').forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm('Dieses Kochbuch verlassen? Du brauchst dann einen neuen Einladungslink.')) return;
+      const { error } = await supabase.from('cookbook_readers').delete()
+        .eq('owner_id', b.dataset.leave).eq('reader_id', session.user.id);
+      if (error) toast(error.message); else renderSharing();
+    };
+  });
+  app.querySelectorAll('[data-share]').forEach((b) => {
+    const r = own.find((x) => x.id === b.dataset.share);
+    b.onclick = () => shareLink(appUrl(`teilen/${r.share_token}`), r.title);
+  });
+}
+
+async function acceptInvite(token) {
+  app.innerHTML = '<p class="loading">Nehme Einladung an …</p>';
+  const { data: owner, error } = await supabase.rpc('accept_cookbook_invite', { p_token: token });
+  if (error) {
+    app.innerHTML = `<div class="notice"><p>${esc(error.message)}</p><a class="btn" href="#/">Zu meinen Rezepten</a></div>`;
+    return;
+  }
+  if (owner === session.user.id) {
+    toast('Das ist dein eigener Einladungslink');
+    location.replace('#/geteilt');
+    return;
+  }
+  toast('Einladung angenommen');
+  location.replace(`#/kochbuch/${owner}`);
+}
+
+const cookbookCache = new Map();
+
+async function loadCookbook(ownerId) {
+  if (cookbookCache.has(ownerId)) return cookbookCache.get(ownerId);
+  const [{ data, error }, people] = await Promise.all([
+    supabase.from('recipes').select('*').eq('owner_id', ownerId),
+    loadPeople(),
+  ]);
+  if (error) throw error;
+  const owner = people.owners.find((o) => o.owner_id === ownerId);
+  if (!owner) return null;
+  const book = { email: owner.owner_email, recipes: data.sort((a, b) => collator.compare(a.title, b.title)) };
+  cookbookCache.set(ownerId, book);
+  return book;
+}
+
+async function renderCookbook(ownerId) {
+  app.innerHTML = '<p class="loading">Lade Kochbuch …</p>';
+  cookbookCache.delete(ownerId);
+  const book = await loadCookbook(ownerId);
+  if (!book) {
+    app.innerHTML = '<div class="notice"><p>Du hast keinen Zugriff (mehr) auf dieses Kochbuch.</p><a class="btn" href="#/geteilt">Zurück</a></div>';
+    return;
+  }
+  app.innerHTML = `
+    <a class="back" href="#/geteilt">← Geteilt</a>
+    <h1>Kochbuch von ${esc(book.email)}</h1>
+    <div class="search"><input type="search" id="q" placeholder="Rezepte durchsuchen" aria-label="Rezepte durchsuchen"></div>
+    <div id="results" class="grid"></div>`;
+  const draw = (q = '') => {
+    const shown = book.recipes.filter((r) => !q || [r.title, r.description, ...r.tags].some((x) => x.toLowerCase().includes(q)));
+    $('#results').innerHTML = shown.length
+      ? shown.map((r) => recipeCard(r, `#/kochbuch/${ownerId}/${r.id}`)).join('')
+      : '<p class="hint">Keine Rezepte gefunden.</p>';
+  };
+  $('#q').oninput = (e) => draw(e.target.value.trim().toLowerCase());
+  draw();
+}
+
+async function renderCookbookRecipe(ownerId, recipeId) {
+  const book = await loadCookbook(ownerId);
+  const r = book?.recipes.find((x) => x.id === recipeId);
+  if (!r) {
+    app.innerHTML = '<div class="notice"><p>Dieses Rezept gibt es nicht (mehr).</p><a class="btn" href="#/geteilt">Zurück</a></div>';
+    return;
+  }
+  showRecipe(r, { own: false, back: `#/kochbuch/${ownerId}`, backLabel: `Kochbuch von ${book.email}` });
+}
+
 // Import per Link: die Edge Function "import-recipe" lädt die Seite und liest das Rezept aus.
 function setupImport(form, { setTags, setSteps, addImage, drawPreview }) {
   const input = $('#import-url');
@@ -688,7 +1000,7 @@ if (isConfigured) {
     const userChanged = newSession?.user?.id !== session?.user?.id;
     session = newSession;
     if (event === 'PASSWORD_RECOVERY') recoveringPassword = true;
-    if (userChanged) recipes = null;
+    if (userChanged) { recipes = null; cookbookCache.clear(); }
     // Nur bei echten Wechseln neu zeichnen, nicht beim stillen Token-Refresh.
     if (userChanged || event === 'PASSWORD_RECOVERY' || event === 'SIGNED_OUT') setTimeout(render);
   });

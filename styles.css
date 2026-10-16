@@ -234,3 +234,15 @@ legend { font-weight: 600; padding: 0 4px; }
 .step-edit textarea { resize: none; overflow: hidden; }
 .danger-link { color: var(--danger); font-size: 0.875rem; }
 #step-add { justify-self: start; }
+
+.from { margin: 0 0 4px; }
+.share-section { display: grid; gap: 10px; margin-bottom: 16px; }
+.share-section h2 { font-size: 1.05rem; }
+.share-section h3 { font-size: 0.95rem; margin: 8px 0 0; }
+.share-section p { margin: 0; }
+.people { list-style: none; padding: 0; margin: 0; }
+.people li {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding: 10px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere;
+}
+.people li:last-child { border-bottom: 0; }
