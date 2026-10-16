@@ -63,8 +63,8 @@ export function isAvailable(name, haveTerms) {
 }
 
 // Liefert passende Rezepte, sortiert: zuerst die, bei denen nichts fehlt, dann nach Anzahl fehlender Zutaten.
-// Rezepte ohne einen einzigen Treffer aus der eigenen Liste werden nicht vorgeschlagen.
-export function suggestRecipes(recipes, have, { useStaples = true, maxMissing = 3 } = {}) {
+// Vorgeschlagen wird jedes Rezept, das mindestens eine der eigenen Zutaten verwendet.
+export function suggestRecipes(recipes, have, { useStaples = true, maxMissing = Infinity } = {}) {
   const own = have.map((t) => t.trim()).filter(Boolean);
   if (!own.length) return [];
   const terms = useStaples ? [...own, ...STAPLES] : own;

@@ -220,3 +220,17 @@ legend { font-weight: 600; padding: 0 4px; }
 .suggestion .ok { color: #2f7a3a; }
 .suggestion .missing { color: var(--muted); }
 @media (prefers-color-scheme: dark) { .suggestion .ok { color: #7cc78a; } }
+
+.tag-chip { display: inline-flex; align-items: center; gap: 4px; padding-right: 4px; cursor: default; background: var(--surface-2); }
+.tag-chip button {
+  display: grid; place-items: center; width: 28px; height: 28px; margin: -4px 0;
+  border: 0; border-radius: 50%; background: transparent; color: var(--muted);
+  font-size: 1.1rem; line-height: 1; cursor: pointer;
+}
+.tag-chip button:hover, .tag-chip button:focus-visible { background: var(--border); color: var(--text); }
+
+.step-edit { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+.step-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; font-weight: 600; font-size: 0.9rem; }
+.step-edit textarea { resize: none; overflow: hidden; }
+.danger-link { color: var(--danger); font-size: 0.875rem; }
+#step-add { justify-self: start; }
