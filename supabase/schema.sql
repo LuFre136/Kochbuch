@@ -22,7 +22,7 @@ create table if not exists public.recipes (
 create index if not exists recipes_owner_idx on public.recipes (owner_id);
 
 create or replace function public.touch_updated_at() returns trigger
-language plpgsql as $$
+language plpgsql set search_path = '' as $$
 begin
   new.updated_at := now();
   return new;
