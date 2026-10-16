@@ -1,6 +1,6 @@
 // Einfacher Service Worker: macht die App installierbar und hält die App-Dateien
 // für schlechte Verbindungen vor. Daten von Supabase werden nicht zwischengespeichert.
-const CACHE = 'kochbuch-v1';
+const CACHE = 'kochbuch-v2';
 const SHELL = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
   'js/app.js', 'js/supabase.js', 'js/config.js', 'js/ingredients.js',
