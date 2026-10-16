@@ -1,7 +1,7 @@
 // Einkaufslisten: Zutaten aus eingeplanten Rezepten zusammenstellen, zusammenrechnen
 // und wieder herausnehmen. Ein Eintrag ist { name, amount, unit, manual, checked, sources },
 // sources = [{ recipe_id, plan_id, title, amount }] mit amount in der Einheit des Eintrags.
-import { nameWords } from './pantry.js';
+import { nameWords, isAvailable, STAPLES } from './pantry.js';
 import { formatAmount } from './ingredients.js';
 
 // Einheiten, die sich ineinander umrechnen lassen, haben dieselbe Klasse.
@@ -59,12 +59,13 @@ export function sameItem(a, b) {
 
 // Zutaten der eingeplanten Rezepte, auf die geplante Personenzahl umgerechnet.
 // entries: [{ plan_id, recipe, servings }]. Gleiche Zutaten werden direkt zusammengefasst.
+// Grundzutaten (Salz, Pfeffer, Wasser, Öl, Zucker) hat man im Haus; sie kommen nicht auf die Liste.
 export function additionsFromPlan(entries) {
   const out = [];
   for (const { plan_id, recipe, servings } of entries) {
     const factor = recipe.servings > 0 && servings > 0 ? servings / recipe.servings : 1;
     for (const ing of recipe.ingredients ?? []) {
-      if (!ing.name?.trim()) continue;
+      if (!ing.name?.trim() || isAvailable(ing.name, STAPLES)) continue;
       const base = ing.amountMax ?? ing.amount; // Bei "2–3" lieber genug kaufen.
       const amount = base == null ? null : round(base * factor);
       const addition = {
