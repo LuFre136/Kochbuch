@@ -6,11 +6,13 @@ import { suggestRecipes, STAPLES } from './pantry.js';
 
 const app = document.getElementById('app');
 const nav = document.getElementById('nav');
+const tabbar = document.getElementById('tabbar');
 
 let session = null;
 let recipes = null; // Cache aller eigenen Rezepte
 let listQuery = '';
 let activeTag = null;
+let listSort = 'name';
 let recoveringPassword = false;
 
 const collator = new Intl.Collator('de', { sensitivity: 'base' });
@@ -96,6 +98,7 @@ async function render() {
   if (!isConfigured) return renderSetup();
   if (recoveringPassword) return renderNewPassword();
   const [first, id, action] = route();
+  renderTabbar(first);
   // Geteilte Einzelrezepte kann man auch ohne Konto ansehen.
   if (first === 'teilen' && id) {
     renderNav();
@@ -106,6 +109,7 @@ async function render() {
   return guarded(async () => {
     if (!first) await renderList();
     else if (first === 'geteilt') await renderSharing();
+    else if (first === 'plan') await renderPlan();
     else if (first === 'einladung' && id) await acceptInvite(id);
     else if (first === 'kochbuch' && id && action) await renderCookbookRecipe(id, action);
     else if (first === 'kochbuch' && id) await renderCookbook(id);
@@ -134,7 +138,7 @@ function renderNav() {
     return;
   }
   nav.innerHTML = `
-    <a class="btn primary small" href="#/neu">+ Neues Rezept</a>
+    <a class="btn primary small" href="#/neu">+ Rezept</a>
     <button class="btn ghost small" id="logout" title="${esc(session.user.email)}">Abmelden</button>`;
   $('#logout', nav).onclick = async () => {
     await supabase.auth.signOut();
@@ -153,6 +157,7 @@ function renderSetup() {
 
 function renderLogin(hint = '') {
   nav.innerHTML = '';
+  tabbar.hidden = true;
   app.innerHTML = `
     <form class="auth card-panel" id="auth">
       <h1>Anmelden</h1>
@@ -222,12 +227,27 @@ function renderNewPassword() {
   };
 }
 
-function tabs(active) {
-  return `<nav class="tabs" aria-label="Ansicht">
-    <a href="#/" class="${active === 'list' ? 'active' : ''}">Rezepte</a>
-    <a href="#/kochen" class="${active === 'pantry' ? 'active' : ''}">Was kochen?</a>
-    <a href="#/geteilt" class="${active === 'shared' ? 'active' : ''}">Geteilt</a>
-  </nav>`;
+const ICONS = {
+  list: '<path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3V4z"/><path d="M5 17a3 3 0 0 1 3-3h11"/>',
+  pantry: '<circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/>',
+  plan: '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>',
+  shop: '<path d="M3 4h2l2.4 11h10.2L20 8H6.2"/><circle cx="9" cy="19.5" r="1.3"/><circle cx="17" cy="19.5" r="1.3"/>',
+  shared: '<circle cx="8" cy="9" r="3"/><circle cx="17" cy="10" r="2.5"/><path d="M3 19c.8-3 2.8-4.5 5-4.5s4.2 1.5 5 4.5M14 18.5c.5-2 1.7-3 3.2-3s2.7 1 3.3 3"/>',
+};
+
+const TABS = [
+  ['list', '#/', 'Rezepte'],
+  ['pantry', '#/kochen', 'Was kochen?'],
+  ['plan', '#/plan', 'Plan'],
+  ['shared', '#/geteilt', 'Geteilt'],
+];
+
+function renderTabbar(first) {
+  if (!session) { tabbar.hidden = true; return; }
+  const active = { '': 'list', r: 'list', neu: 'list', kochen: 'pantry', plan: 'plan', einkauf: 'shop', geteilt: 'shared', kochbuch: 'shared', liste: 'shop' }[first || ''];
+  tabbar.hidden = false;
+  tabbar.innerHTML = TABS.map(([key, href, label]) => `<a href="${href}" class="${key === active ? 'active' : ''}"${key === active ? ' aria-current="page"' : ''}>
+    <svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[key]}</svg><span>${label}</span></a>`).join('');
 }
 
 // Die eingegebenen Zutaten bleiben auf dem Gerät gespeichert, damit man sie nicht jedes Mal neu tippt.
@@ -252,7 +272,7 @@ async function renderPantry() {
     .sort(collator.compare);
 
   app.innerHTML = `
-    ${tabs('pantry')}
+    
     <div class="pantry card-panel">
       <label for="have">Welche Zutaten hast du?</label>
       <div class="import-row">
@@ -325,7 +345,7 @@ async function renderList() {
   app.innerHTML = '<p class="loading">Lade Rezepte …</p>';
   const all = await loadRecipes();
   if (!all.length) {
-    app.innerHTML = `${tabs('list')}<div class="empty">
+    app.innerHTML = `<div class="empty">
       <h1>Noch keine Rezepte</h1>
       <p>Lege dein erstes Rezept an.</p>
       <a class="btn primary" href="#/neu">+ Neues Rezept</a></div>`;
@@ -334,9 +354,13 @@ async function renderList() {
   const tags = [...new Set(all.flatMap((r) => r.tags))].sort(collator.compare);
   if (activeTag && !tags.includes(activeTag)) activeTag = null;
   app.innerHTML = `
-    ${tabs('list')}
+    
     <div class="search">
       <input type="search" id="q" placeholder="Titel, Beschreibung oder Tag suchen" value="${esc(listQuery)}" aria-label="Rezepte durchsuchen">
+      <select id="sort" aria-label="Sortierung">
+        <option value="name"${listSort === 'name' ? ' selected' : ''}>A–Z</option>
+        <option value="rating"${listSort === 'rating' ? ' selected' : ''}>Beste zuerst</option>
+      </select>
     </div>
     ${tags.length ? `<div class="chips">${tags.map((t) => `<button class="chip${t === activeTag ? ' active' : ''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}</div>` : ''}
     <div id="results" class="grid"></div>`;
@@ -346,10 +370,12 @@ async function renderList() {
     const q = listQuery.trim().toLowerCase();
     const shown = all.filter((r) => (!activeTag || r.tags.includes(activeTag))
       && (!q || [r.title, r.description, ...r.tags].some((s) => s.toLowerCase().includes(q))));
+    if (listSort === 'rating') shown.sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0) || collator.compare(a.title, b.title));
     results.innerHTML = shown.length ? shown.map((r) => recipeCard(r)).join('')
       : '<p class="hint">Keine passenden Rezepte gefunden.</p>';
   };
   $('#q').oninput = (e) => { listQuery = e.target.value; draw(); };
+  $('#sort').onchange = (e) => { listSort = e.target.value; draw(); };
   app.querySelectorAll('.chip').forEach((chip) => {
     chip.onclick = () => {
       activeTag = activeTag === chip.dataset.tag ? null : chip.dataset.tag;
@@ -364,7 +390,7 @@ function recipeCard(r, href = `#/r/${r.id}`) {
   const img = r.images[0]
     ? `<img src="${esc(imageUrl(r.images[0]))}" alt="" loading="lazy">`
     : '<div class="placeholder" aria-hidden="true">🍲</div>';
-  const meta = [r.total_minutes != null ? `⏱ ${formatMinutes(r.total_minutes)}` : '', ...r.tags.slice(0, 3)]
+  const meta = [r.rating ? '★'.repeat(r.rating) : '', r.total_minutes != null ? `⏱ ${formatMinutes(r.total_minutes)}` : '', ...r.tags.slice(0, 3)]
     .filter(Boolean).map((m) => `<span>${esc(m)}</span>`).join('');
   return `<a class="card" href="${href}">
     ${img}
@@ -394,6 +420,9 @@ function showRecipe(r, { own, back, backLabel, from = '' }) {
       ${from ? `<p class="hint from">${esc(from)}</p>` : ''}
       ${r.images.length ? `<div class="gallery">${r.images.map((p) => `<img src="${esc(imageUrl(p))}" alt="">`).join('')}</div>` : ''}
       <h1>${esc(r.title)}</h1>
+      ${own ? `<div class="stars" role="group" aria-label="Bewertung">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-star="${n}" class="${(r.rating ?? 0) >= n ? 'on' : ''}" aria-label="${n} von 5 Sternen" aria-pressed="${r.rating === n}">★</button>`).join('')}</div>`
+    : r.rating ? `<div class="stars readonly" aria-label="${r.rating} von 5 Sternen">${'★'.repeat(r.rating)}${'☆'.repeat(5 - r.rating)}</div>` : ''}
+      ${own ? '<div id="planned"></div>' : ''}
       ${r.description ? `<p class="lead">${esc(r.description)}</p>` : ''}
       ${r.tags.length ? `<div class="chips static">${r.tags.map((t) => `<span class="chip">${esc(t)}</span>`).join('')}</div>` : ''}
       ${r.total_minutes != null || r.cook_minutes != null ? `<dl class="times">
@@ -423,6 +452,7 @@ function showRecipe(r, { own, back, backLabel, from = '' }) {
       </ul></section>` : ''}
 
       <div class="actions">${own ? `
+        <button class="btn primary" id="plan-btn">Einplanen</button>
         <a class="btn" href="#/r/${r.id}/bearbeiten">Bearbeiten</a>
         <button class="btn" id="share">Teilen</button>
         ${r.share_token ? '<button class="btn ghost" id="unshare">Teilen beenden</button>' : ''}
@@ -452,6 +482,22 @@ function showRecipe(r, { own, back, backLabel, from = '' }) {
     else $('#login-copy').onclick = () => renderLogin('Melde dich an oder registriere dich. Danach kannst du das Rezept übernehmen.');
     return;
   }
+
+  app.querySelectorAll('.stars button').forEach((b) => {
+    b.onclick = async () => {
+      const n = Number(b.dataset.star);
+      const rating = r.rating === n ? null : n; // gleicher Stern nochmal = Bewertung löschen
+      const { error } = await supabase.from('recipes').update({ rating }).eq('id', r.id);
+      if (error) { toast(error.message); return; }
+      r.rating = rating;
+      app.querySelectorAll('.stars button').forEach((x) => {
+        x.classList.toggle('on', (rating ?? 0) >= Number(x.dataset.star));
+        x.setAttribute('aria-pressed', String(rating === Number(x.dataset.star)));
+      });
+    };
+  });
+
+  setupPlanning(r, () => servings);
 
   $('#share').onclick = async () => {
     try {
@@ -691,6 +737,100 @@ async function renderEditor(id) {
   };
 }
 
+// ---------- Planen ----------
+
+const today = () => new Date().toLocaleDateString('sv-SE'); // JJJJ-MM-TT in Ortszeit
+
+function formatDay(iso) {
+  const d = new Date(`${iso}T12:00:00`);
+  const diff = Math.round((d - new Date(`${today()}T12:00:00`)) / 86400000);
+  if (diff === 0) return 'Heute';
+  if (diff === 1) return 'Morgen';
+  return d.toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'long' });
+}
+
+// Kommende Einträge; vergangene werden dabei aufgeräumt.
+async function loadPlan() {
+  await supabase.from('meal_plan').delete().eq('owner_id', session.user.id).lt('planned_for', today());
+  const { data, error } = await supabase.from('meal_plan').select('*')
+    .eq('owner_id', session.user.id).gte('planned_for', today()).order('planned_for');
+  if (error) throw error;
+  return data;
+}
+
+function setupPlanning(r, currentServings) {
+  const box = $('#planned');
+  const drawPlanned = async () => {
+    const { data } = await supabase.from('meal_plan').select('*')
+      .eq('recipe_id', r.id).gte('planned_for', today()).order('planned_for');
+    box.innerHTML = data?.length ? `<p class="planned-info">Eingeplant: ${data.map((p) => `<span class="chip">${esc(formatDay(p.planned_for))} · ${p.servings} P.</span>`).join(' ')}</p>` : '';
+  };
+  drawPlanned();
+
+  $('#plan-btn').onclick = () => {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'sheet';
+    dialog.innerHTML = `<form method="dialog" class="sheet-form">
+      <h2>„${esc(r.title)}“ einplanen</h2>
+      <label>Datum <input type="date" name="date" required min="${today()}" value="${today()}"></label>
+      <label>Personen <input type="number" name="servings" min="1" max="100" required value="${currentServings()}"></label>
+      <div class="row">
+        <button class="btn primary" value="ok">Einplanen</button>
+        <button class="btn ghost" value="cancel" formnovalidate>Abbrechen</button>
+      </div>
+    </form>`;
+    document.body.append(dialog);
+    dialog.addEventListener('close', async () => {
+      const form = dialog.querySelector('form');
+      if (dialog.returnValue === 'ok') {
+        const { error } = await supabase.from('meal_plan').insert({
+          recipe_id: r.id, planned_for: form.date.value, servings: Number(form.servings.value),
+        });
+        if (error) toast(error.message);
+        else { toast(`Eingeplant für ${formatDay(form.date.value)}`); drawPlanned(); }
+      }
+      dialog.remove();
+    });
+    dialog.showModal();
+  };
+}
+
+async function renderPlan() {
+  app.innerHTML = '<p class="loading">Lade Plan …</p>';
+  const [plan, own] = await Promise.all([loadPlan(), loadRecipes()]);
+  const byId = new Map(own.map((r) => [r.id, r]));
+  const entries = plan.filter((p) => byId.has(p.recipe_id));
+  if (!entries.length) {
+    app.innerHTML = `<div class="empty"><h1>Noch nichts eingeplant</h1>
+      <p>Öffne ein Rezept und tippe auf „Einplanen“, um es für einen Tag vorzumerken.</p>
+      <a class="btn" href="#/">Zu den Rezepten</a></div>`;
+    return;
+  }
+  const days = [...new Set(entries.map((p) => p.planned_for))];
+  app.innerHTML = `<h1>Plan</h1>
+    <div id="plan-actions" class="plan-actions"></div>
+    ${days.map((day) => `<section class="plan-day">
+      <h2>${esc(formatDay(day))}</h2>
+      <div class="suggestions">${entries.filter((p) => p.planned_for === day).map((p) => {
+    const r = byId.get(p.recipe_id);
+    return `<div class="suggestion plan-entry" data-id="${p.id}">
+          ${r.images[0] ? `<img src="${esc(imageUrl(r.images[0]))}" alt="" loading="lazy">` : '<div class="placeholder" aria-hidden="true">🍲</div>'}
+          <div><h3><a href="#/r/${r.id}">${esc(r.title)}</a></h3>
+            <p class="missing">${p.servings} ${p.servings === 1 ? 'Person' : 'Personen'}</p>
+            <div class="entry-actions"><button class="link danger-link" data-remove="${p.id}">Entfernen</button></div></div>
+        </div>`;
+  }).join('')}</div>
+    </section>`).join('')}`;
+
+  app.querySelectorAll('[data-remove]').forEach((b) => {
+    b.onclick = async () => {
+      const { error } = await supabase.from('meal_plan').delete().eq('id', b.dataset.remove);
+      if (error) toast(error.message); else renderPlan();
+    };
+  });
+  return { entries, byId };
+}
+
 // ---------- Teilen ----------
 
 function appUrl(path) {
@@ -787,7 +927,7 @@ async function loadPeople() {
 }
 
 async function renderSharing() {
-  app.innerHTML = `${tabs('shared')}<p class="loading">Lade …</p>`;
+  app.innerHTML = `<p class="loading">Lade …</p>`;
   const [own, people, invite] = await Promise.all([
     loadRecipes(),
     loadPeople(),
@@ -799,7 +939,7 @@ async function renderSharing() {
   const { readers, owners } = people;
 
   app.innerHTML = `
-    ${tabs('shared')}
+    
     <section class="card-panel share-section">
       <h2>Mit mir geteilte Kochbücher</h2>
       ${owners.length ? `<ul class="people">${owners.map((o) => `<li>

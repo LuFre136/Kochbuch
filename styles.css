@@ -176,7 +176,7 @@ legend { font-weight: 600; padding: 0 4px; }
 }
 
 .toast {
-  position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+  position: fixed; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom)); transform: translateX(-50%);
   max-width: calc(100% - 32px);
   background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 999px;
   font-weight: 600; z-index: 20;
@@ -246,3 +246,55 @@ legend { font-weight: 600; padding: 0 4px; }
   padding: 10px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere;
 }
 .people li:last-child { border-bottom: 0; }
+
+/* Navigation unten (wie in iPhone-Apps) */
+main { padding-bottom: calc(88px + env(safe-area-inset-bottom)); }
+.tabbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+  display: flex; justify-content: space-around;
+  padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border-top: 1px solid var(--border);
+}
+.tabbar[hidden] { display: none; }
+.tabbar a {
+  flex: 1; max-width: 110px; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 4px 2px; color: var(--muted); text-decoration: none; font-size: 0.7rem; font-weight: 600;
+  border-radius: 10px;
+}
+.tabbar a.active { color: var(--accent); }
+.tabbar svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+.search { display: flex; gap: 8px; }
+.search input { flex: 1; min-width: 0; }
+.search select {
+  flex: none; padding: 0 10px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); color: var(--text); font: inherit; font-size: 0.9rem;
+}
+
+/* Bewertung */
+.stars { display: flex; gap: 2px; margin: -4px 0 8px; }
+.stars button {
+  width: 36px; height: 36px; padding: 0; border: 0; background: none; cursor: pointer;
+  font-size: 1.6rem; line-height: 1; color: var(--border);
+}
+.stars button.on { color: #e0a321; }
+.stars.readonly { color: #e0a321; font-size: 1.2rem; letter-spacing: 2px; }
+
+.planned-info { margin: 0 0 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 0.9rem; color: var(--muted); }
+
+/* Dialog von unten */
+dialog.sheet {
+  border: 0; padding: 0; border-radius: 18px; width: min(100% - 32px, 440px);
+  background: var(--surface); color: var(--text); box-shadow: 0 10px 40px rgb(0 0 0 / 0.25);
+}
+dialog.sheet::backdrop { background: rgb(0 0 0 / 0.35); }
+.sheet-form { display: grid; gap: 14px; padding: 20px; }
+.sheet-form h2 { margin: 0; }
+
+/* Plan */
+.plan-day h2 { margin: 20px 0 10px; }
+.plan-entry h3 a { color: inherit; text-decoration: none; }
+.entry-actions { display: flex; gap: 14px; margin-top: 4px; }
+.plan-actions:empty { display: none; }
