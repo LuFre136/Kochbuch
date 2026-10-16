@@ -346,7 +346,7 @@ async function renderList() {
     const q = listQuery.trim().toLowerCase();
     const shown = all.filter((r) => (!activeTag || r.tags.includes(activeTag))
       && (!q || [r.title, r.description, ...r.tags].some((s) => s.toLowerCase().includes(q))));
-    results.innerHTML = shown.length ? shown.map(recipeCard).join('')
+    results.innerHTML = shown.length ? shown.map((r) => recipeCard(r)).join('')
       : '<p class="hint">Keine passenden Rezepte gefunden.</p>';
   };
   $('#q').oninput = (e) => { listQuery = e.target.value; draw(); };
