@@ -73,3 +73,13 @@ test('Tipps der Autorin landen in den Notizen, auch ohne eigenen Absatz', () => 
   assert.equal(splitNotes(['Teig rühren.', '**Tipp:** Mit Honig süßen.']).notes, '**Tipp:** Mit Honig süßen.');
   assert.equal(splitNotes(['Mit Tipps von Oma würzen.', 'Servieren.']).notes, '');
 });
+
+test('echtes Chefkoch-Bananenbrot: Tipps in die Notizen, kein Schritt „Zubereitung:“', () => {
+  const r = extractRecipe(fixture('chefkoch-bananenbrot.html'), 'https://www.chefkoch.de/rezepte/2733891425739452/');
+  assert.ok(r.steps.length >= 4);
+  assert.ok(!r.steps.includes('Zubereitung:'));
+  assert.ok(r.steps.every((s) => !/Tipps und Varianten|^- /.test(s)));
+  assert.match(r.steps.at(-1), /kcal\.$/);
+  assert.match(r.notes, /^Tipps und Varianten von der Rezeptautorin:\n- In einer Dose/);
+  assert.match(r.notes, /\n- Ich backe es/);
+});
