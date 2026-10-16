@@ -56,3 +56,10 @@ test('Grundzutaten lassen sich abschalten', () => {
 test('ohne eigene Zutaten keine Vorschläge', () => {
   assert.deepEqual(suggestRecipes(recipes, []), []);
 });
+
+test('findet auch Rezepte, bei denen viele Zutaten fehlen', () => {
+  const brot = r('Bananenbrot', 'Banane(n), sehr reife', 'Apfel', 'Dinkelmehl', 'Haferflocken, zarte', 'Backpulver', 'Zimt', 'Ei(er)', 'Nüsse, gehackt');
+  const out = suggestRecipes([...recipes, brot], ['Banane']);
+  assert.deepEqual(out.map((x) => x.recipe.title), ['Bananenbrot']);
+  assert.equal(out[0].missing.length, 7);
+});

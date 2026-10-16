@@ -21,6 +21,7 @@ test('liest ein Chefkoch-Rezept aus', () => {
     'Pancetta in Streifen schneiden und knusprig braten.',
     'Eigelb mit Parmesan verrühren.',
   ]);
+  assert.equal(r.notes, 'Tipps und Varianten von der Rezeptautorin:\n- Statt Pancetta geht auch Guanciale.\n- Schmeckt auch mit Pecorino.');
   assert.equal(r.imageUrl, 'https://img.chefkoch-cdn.de/rezepte/123/bilder/456/crop-960x640/spaghetti-carbonara.jpg');
 });
 
@@ -31,6 +32,7 @@ test('liest WordPress-Rezepte mit @graph und Abschnitten aus', () => {
   assert.equal(r.servings, 2);
   assert.equal(r.total_minutes, 45);
   assert.equal(r.cook_minutes, null);
+  assert.equal(r.notes, '');
   assert.deepEqual(r.tags, ['Indisch']);
   assert.deepEqual(r.steps, ['Vorbereitung:', 'Zwiebel würfeln.', 'Kochen:', 'Linsen 20 Minuten köcheln.', 'Mit Kokosmilch abschmecken.']);
   assert.equal(r.imageUrl, 'https://blog.example.de/wp-content/dal.jpg');

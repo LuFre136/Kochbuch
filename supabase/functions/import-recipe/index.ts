@@ -5,7 +5,7 @@
 //
 // Aufruf aus der App: supabase.functions.invoke('import-recipe', { body: { url } })
 // Antwort: { title, description, tags, servings, total_minutes, cook_minutes,
-//            ingredients: string[], steps: string[], source, image } (image als data:-URL)
+//            ingredients: string[], steps: string[], notes, source, image } (image als data:-URL)
 
 const MAX_PAGE_BYTES = 5_000_000;
 const MAX_IMAGE_BYTES = 8_000_000;
@@ -105,6 +105,16 @@ export function extractInstructions(raw: unknown): string[] {
   return out;
 }
 
+// Viele Seiten (z. B. Chefkoch) hängen Tipps der Autorin an die Zubereitung an.
+// Ab einer Zeile wie "Tipps und Varianten …:" gehört der Rest in die Notizen.
+const NOTES_HEADING = /^(tipps?|tricks?|hinweise?|anmerkungen?|varianten?|notizen?|serviervorschlag|aufbewahrung)\b/i;
+
+export function splitNotes(lines: string[]): { steps: string[]; notes: string } {
+  const at = lines.findIndex((l) => NOTES_HEADING.test(l));
+  if (at <= 0) return { steps: lines, notes: '' };
+  return { steps: lines.slice(0, at), notes: lines.slice(at).join('\n') };
+}
+
 function firstImageUrl(img: unknown): string | null {
   if (!img) return null;
   if (typeof img === 'string') return img;
@@ -144,6 +154,7 @@ export interface ImportedRecipe {
   cook_minutes: number | null;
   ingredients: string[];
   steps: string[];
+  notes: string;
   imageUrl: string | null;
   structured: boolean;
 }
@@ -169,7 +180,7 @@ export function extractRecipe(html: string, pageUrl: string): ImportedRecipe {
     return {
       title: metaContent(html, 'og:title') ?? cleanText(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]),
       description: metaContent(html, 'og:description') ?? metaContent(html, 'description') ?? '',
-      tags: [], servings: null, total_minutes: null, cook_minutes: null, ingredients: [], steps: [],
+      tags: [], servings: null, total_minutes: null, cook_minutes: null, ingredients: [], steps: [], notes: '',
       imageUrl: absolute(metaContent(html, 'og:image')),
       structured: false,
     };
@@ -195,7 +206,7 @@ export function extractRecipe(html: string, pageUrl: string): ImportedRecipe {
     total_minutes: total,
     cook_minutes: cook,
     ingredients: listOfLines(recipe.recipeIngredient ?? recipe.ingredients),
-    steps: extractInstructions(recipe.recipeInstructions),
+    ...splitNotes(extractInstructions(recipe.recipeInstructions)),
     imageUrl: absolute(firstImageUrl(recipe.image) ?? metaContent(html, 'og:image')),
     structured: true,
   };

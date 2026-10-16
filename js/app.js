@@ -267,17 +267,20 @@ async function renderPantry() {
       return;
     }
     const complete = hits.filter((h) => !h.missing.length);
-    const partial = hits.filter((h) => h.missing.length);
+    const almost = hits.filter((h) => h.missing.length && h.missing.length <= 3);
+    const more = hits.filter((h) => h.missing.length > 3);
+    const missingText = (m) => (m.length <= 3
+      ? `Es fehlt: ${m.map(esc).join(', ')}`
+      : `Es fehlen ${m.length} Zutaten: ${m.slice(0, 3).map(esc).join(', ')} …`);
     const card = (h) => `<a class="suggestion" href="#/r/${h.recipe.id}">
       ${h.recipe.images[0] ? `<img src="${esc(imageUrl(h.recipe.images[0]))}" alt="" loading="lazy">` : '<div class="placeholder" aria-hidden="true">🍲</div>'}
       <div><h3>${esc(h.recipe.title)}</h3>
-      <p class="${h.missing.length ? 'missing' : 'ok'}">${h.missing.length
-        ? `Es fehlt: ${h.missing.map(esc).join(', ')}`
-        : `Alle ${h.total} Zutaten da`}</p></div>
+      <p class="${h.missing.length ? 'missing' : 'ok'}">${h.missing.length ? missingText(h.missing) : `Alle ${h.total} Zutaten da`}</p></div>
     </a>`;
-    out.innerHTML = `
-      ${complete.length ? `<h2>Kannst du sofort kochen</h2><div class="suggestions">${complete.map(card).join('')}</div>` : ''}
-      ${partial.length ? `<h2>Fast alles da</h2><div class="suggestions">${partial.map(card).join('')}</div>` : ''}`;
+    const section = (title, list) => (list.length ? `<h2>${title}</h2><div class="suggestions">${list.map(card).join('')}</div>` : '');
+    out.innerHTML = section('Kannst du sofort kochen', complete)
+      + section('Fast alles da', almost)
+      + section('Weitere Rezepte mit deinen Zutaten', more);
   };
 
   const add = () => {
@@ -431,6 +434,9 @@ async function renderEditor(id) {
     ingredients: [], steps: [], sources: [], notes: '', images: [],
   };
   let keptImages = [...r.images];
+  let tags = [...r.tags];
+  let steps = r.steps.length ? [...r.steps] : [''];
+  const knownTags = [...new Set((recipes || []).flatMap((x) => x.tags))].sort(collator.compare);
   let newFiles = [];
 
   app.innerHTML = `
@@ -451,8 +457,15 @@ async function renderEditor(id) {
 
       <label>Titel <input name="title" required maxlength="200" value="${esc(r.title)}"></label>
       <label>Kurze Beschreibung <textarea name="description" rows="2">${esc(r.description)}</textarea></label>
-      <label>Tags <input name="tags" value="${esc(r.tags.join(', '))}" placeholder="z. B. vegetarisch, schnell, Pasta">
-        <small>Mit Komma trennen</small></label>
+      <fieldset>
+        <legend>Tags</legend>
+        <div class="chips static" id="tag-chips"></div>
+        <div class="import-row">
+          <input id="tag-input" list="known-tags" placeholder="Neuer Tag, z. B. vegetarisch" autocomplete="off" enterkeyhint="done">
+          <button type="button" class="btn" id="tag-add">Hinzufügen</button>
+        </div>
+        <datalist id="known-tags">${knownTags.map((t) => `<option value="${esc(t)}">`).join('')}</datalist>
+      </fieldset>
 
       <div class="cols">
         <label>Personen <input name="servings" type="number" min="1" max="100" required value="${r.servings}"></label>
@@ -464,7 +477,11 @@ async function renderEditor(id) {
         <small>Eine Zutat pro Zeile, Menge zuerst. Die Menge bezieht sich auf die Personenzahl oben.</small></label>
       <ul class="parse-preview" id="preview"></ul>
 
-      <label>Zubereitung <textarea name="steps" rows="8" placeholder="Ein Schritt pro Zeile">${esc(r.steps.join('\n'))}</textarea></label>
+      <fieldset>
+        <legend>Zubereitung</legend>
+        <ol class="step-edit" id="steps"></ol>
+        <button type="button" class="btn small" id="step-add">+ Schritt hinzufügen</button>
+      </fieldset>
       <label>Notizen <textarea name="notes" rows="3">${esc(r.notes)}</textarea></label>
       <label>Quellen <textarea name="sources" rows="2" placeholder="https://… (ein Link pro Zeile)">${esc(r.sources.join('\n'))}</textarea></label>
 
@@ -509,7 +526,52 @@ async function renderEditor(id) {
   };
   drawThumbs();
 
-  if (!existing) setupImport(form, { addImage: (file) => { newFiles.push({ file, preview: URL.createObjectURL(file) }); drawThumbs(); }, drawPreview });
+  // Tags: einzeln hinzufügen, entfernen nur über das × am jeweiligen Tag.
+  const tagInput = $('#tag-input');
+  const drawTags = () => {
+    $('#tag-chips').innerHTML = tags.length
+      ? tags.map((t, i) => `<span class="chip tag-chip">${esc(t)}<button type="button" data-i="${i}" aria-label="Tag ${esc(t)} entfernen">×</button></span>`).join('')
+      : '<span class="hint">Noch keine Tags</span>';
+    app.querySelectorAll('#tag-chips button').forEach((b) => {
+      b.onclick = () => { tags.splice(Number(b.dataset.i), 1); drawTags(); };
+    });
+  };
+  const setTags = (list) => { tags = [...new Set(list.map((t) => t.trim()).filter(Boolean))]; drawTags(); };
+  const addTag = () => {
+    const parts = tagInput.value.split(',').map((t) => t.trim()).filter(Boolean);
+    setTags([...tags, ...parts.filter((p) => !tags.some((t) => t.toLowerCase() === p.toLowerCase()))]);
+    tagInput.value = '';
+  };
+  $('#tag-add').onclick = () => { addTag(); tagInput.focus(); };
+  tagInput.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); addTag(); } };
+  drawTags();
+
+  // Schritte: jeder Schritt hat sein eigenes, nummeriertes Feld.
+  const stepList = $('#steps');
+  const grow = (ta) => { ta.style.height = 'auto'; ta.style.height = `${ta.scrollHeight + 2}px`; };
+  const drawSteps = () => {
+    stepList.innerHTML = steps.map((text, i) => `<li>
+      <div class="step-head"><span>Schritt ${i + 1}</span>
+        ${steps.length > 1 ? `<button type="button" class="link danger-link" data-remove="${i}">Entfernen</button>` : ''}</div>
+      <textarea data-step="${i}" rows="2" aria-label="Schritt ${i + 1}">${esc(text)}</textarea>
+    </li>`).join('');
+    stepList.querySelectorAll('textarea').forEach((ta) => {
+      grow(ta);
+      ta.oninput = () => { steps[Number(ta.dataset.step)] = ta.value; grow(ta); };
+    });
+    stepList.querySelectorAll('[data-remove]').forEach((b) => {
+      b.onclick = () => { steps.splice(Number(b.dataset.remove), 1); drawSteps(); };
+    });
+  };
+  const setSteps = (list) => { steps = list.length ? [...list] : ['']; drawSteps(); };
+  $('#step-add').onclick = () => {
+    steps.push('');
+    drawSteps();
+    stepList.querySelector('li:last-child textarea').focus();
+  };
+  drawSteps();
+
+  if (!existing) setupImport(form, { setTags, setSteps, addImage: (file) => { newFiles.push({ file, preview: URL.createObjectURL(file) }); drawThumbs(); }, drawPreview });
 
   form.onsubmit = async (e) => {
     e.preventDefault();
@@ -526,18 +588,19 @@ async function renderEditor(id) {
         if (error) throw error;
         uploaded.push(path);
       }
+      if (tagInput.value.trim()) addTag();
       const num = (v) => (v === '' ? null : Math.max(0, Math.round(Number(v))));
       const lines = (v) => v.split('\n').map((s) => s.trim()).filter(Boolean);
       const row = {
         id: recipeId,
         title: form.title.value.trim(),
         description: form.description.value.trim(),
-        tags: [...new Set(form.tags.value.split(',').map((t) => t.trim()).filter(Boolean))],
+        tags,
         servings: Math.max(1, num(form.servings.value) || 1),
         total_minutes: num(form.total_minutes.value),
         cook_minutes: num(form.cook_minutes.value),
         ingredients: lines(form.ingredients.value).map(parseIngredientLine),
-        steps: lines(form.steps.value),
+        steps: steps.map((st) => st.trim()).filter(Boolean),
         sources: lines(form.sources.value),
         notes: form.notes.value.trim(),
         images: [...keptImages, ...uploaded],
@@ -564,7 +627,7 @@ async function renderEditor(id) {
 }
 
 // Import per Link: die Edge Function "import-recipe" lädt die Seite und liest das Rezept aus.
-function setupImport(form, { addImage, drawPreview }) {
+function setupImport(form, { setTags, setSteps, addImage, drawPreview }) {
   const input = $('#import-url');
   const btn = $('#import-btn');
   const msg = $('#import-msg');
@@ -586,12 +649,13 @@ function setupImport(form, { addImage, drawPreview }) {
       }
       if (data.title) form.title.value = data.title;
       if (data.description) form.description.value = data.description;
-      if (data.tags?.length) form.tags.value = data.tags.join(', ');
+      if (data.tags?.length) setTags(data.tags);
       if (data.servings) form.servings.value = data.servings;
       if (data.total_minutes != null) form.total_minutes.value = data.total_minutes;
       if (data.cook_minutes != null) form.cook_minutes.value = data.cook_minutes;
       if (data.ingredients?.length) form.ingredients.value = data.ingredients.join('\n');
-      if (data.steps?.length) form.steps.value = data.steps.join('\n');
+      if (data.steps?.length) setSteps(data.steps);
+      if (data.notes) form.notes.value = [form.notes.value.trim(), data.notes].filter(Boolean).join('\n\n');
       const sources = form.sources.value.split('\n').map((s) => s.trim()).filter(Boolean);
       if (!sources.includes(data.source)) form.sources.value = [...sources, data.source].join('\n');
       if (data.image) {
