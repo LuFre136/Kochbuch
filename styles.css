@@ -298,3 +298,39 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 0.35); }
 .plan-entry h3 a { color: inherit; text-decoration: none; }
 .entry-actions { display: flex; gap: 14px; margin-top: 4px; }
 .plan-actions:empty { display: none; }
+.plan-actions { margin-bottom: 8px; }
+.on-list { color: #2f7a3a; }
+@media (prefers-color-scheme: dark) { .on-list { color: #7cc78a; } }
+
+/* Einkaufsliste */
+.list-head { display: flex; gap: 8px; margin: 4px 0 12px; }
+.list-head select {
+  flex: 1; min-width: 0; min-height: 44px; padding: 0 12px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); color: var(--text); font: inherit; font-size: 1.05rem; font-weight: 700;
+}
+.add-item { margin-bottom: 12px; }
+#list-recipes .hint { margin: 0 0 6px; }
+#list-recipes .chips { margin-bottom: 12px; }
+.shop-items {
+  list-style: none; padding: 0; margin: 0 0 16px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.shop-items li { display: flex; align-items: center; gap: 4px; padding: 2px 4px 2px 12px; border-bottom: 1px solid var(--border); }
+.shop-items li:last-child { border-bottom: 0; }
+.shop-items .empty-list { padding: 14px; }
+.shop-check { flex: 1; display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; font-weight: 400; font-size: 1rem; cursor: pointer; }
+.shop-check input { width: 22px; height: 22px; margin: 1px 0 0; flex: none; accent-color: var(--accent); }
+.shop-check small { display: block; color: var(--muted); font-size: 0.8rem; }
+.shop-check .qty { font-weight: 600; }
+.shop-items li.done .shop-check > span { color: var(--muted); text-decoration: line-through; }
+.icon-btn {
+  flex: none; width: 40px; height: 40px; border: 0; border-radius: 50%;
+  background: transparent; color: var(--muted); font-size: 1.3rem; cursor: pointer;
+}
+.icon-btn:hover, .icon-btn:focus-visible { background: var(--surface-2); color: var(--text); }
+.done-head { margin: 8px 0; }
+.list-settings { margin-top: 8px; }
+.choices { display: grid; gap: 10px; }
+.choices .check { color: var(--text); font-size: 1rem; }
+.sheet-form p { margin: 0; }

@@ -1,0 +1,111 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  itemKey, unitsCompatible, convert, additionsFromPlan, findConflict, mergeInto, removeRecipe,
+  recipesOnList, plannedIds, formatItemQuantity,
+} from '../js/shopping.js';
+
+const brot = {
+  id: 'r1', title: 'Bananenbrot', servings: 4,
+  ingredients: [
+    { amount: 3, amountMax: null, unit: '', name: 'Bananen, reif' },
+    { amount: 250, amountMax: null, unit: 'g', name: 'Mehl' },
+    { amount: 2, amountMax: 3, unit: '', name: 'Eier' },
+    { amount: null, amountMax: null, unit: '', name: 'Salz' },
+  ],
+};
+const kuchen = {
+  id: 'r2', title: 'Kuchen', servings: 2,
+  ingredients: [
+    { amount: 0.5, amountMax: null, unit: 'kg', name: 'Weizenmehl' },
+    { amount: 100, amountMax: null, unit: 'g', name: 'Mehl' },
+    { amount: 1, amountMax: null, unit: 'Stück', name: 'Ei' },
+    { amount: 1, amountMax: null, unit: 'EL', name: 'Zucker' },
+  ],
+};
+
+test('gleiche Zutaten werden erkannt, Zusätze ignoriert', () => {
+  assert.equal(itemKey('Zwiebel(n), gewürfelt'), itemKey('Zwiebeln'));
+  assert.equal(itemKey('Eier'), itemKey('Ei'));
+  assert.notEqual(itemKey('Mehl'), itemKey('Weizenmehl'));
+});
+
+test('Einheiten: umrechenbar oder gleich', () => {
+  assert.ok(unitsCompatible('g', 'kg'));
+  assert.ok(unitsCompatible('l', 'ml'));
+  assert.ok(unitsCompatible('', 'Stück'));
+  assert.ok(unitsCompatible('Zehe', 'Zehen'));
+  assert.ok(!unitsCompatible('g', 'EL'));
+  assert.ok(!unitsCompatible('', 'g'));
+  assert.equal(convert(0.5, 'kg', 'g'), 500);
+  assert.equal(convert(250, 'ml', 'l'), 0.25);
+});
+
+test('Zutaten aus dem Plan auf die Personenzahl umrechnen', () => {
+  const adds = additionsFromPlan([{ plan_id: 'p1', recipe: brot, servings: 8 }]);
+  const by = Object.fromEntries(adds.map((a) => [a.name, a]));
+  assert.equal(by.Bananen.amount, 6);
+  assert.equal(by.Mehl.amount, 500);
+  assert.equal(by.Mehl.unit, 'g');
+  assert.equal(by.Eier.amount, 6, 'bei Spannen die obere Menge');
+  assert.equal(by.Salz.amount, null);
+  assert.deepEqual(by.Mehl.sources, [{ recipe_id: 'r1', plan_id: 'p1', title: 'Bananenbrot', amount: 500 }]);
+});
+
+test('gleiche Zutaten mehrerer Rezepte werden zusammengefasst', () => {
+  const adds = additionsFromPlan([
+    { plan_id: 'p1', recipe: brot, servings: 4 },
+    { plan_id: 'p2', recipe: kuchen, servings: 2 },
+  ]);
+  const mehl = adds.find((a) => a.name === 'Mehl');
+  assert.equal(mehl.amount, 350);
+  assert.equal(mehl.sources.length, 2);
+  assert.ok(adds.find((a) => a.name === 'Weizenmehl'), 'Weizenmehl bleibt eigener Eintrag');
+  const eier = adds.find((a) => a.name === 'Eier');
+  assert.equal(eier.amount, 4);
+  assert.deepEqual(eier.sources.map((s) => s.title), ['Bananenbrot', 'Kuchen']);
+});
+
+test('Konflikt nur bei offenem Eintrag mit passender Einheit', () => {
+  const add = { name: 'Mehl', amount: 0.2, unit: 'kg', sources: [{ recipe_id: 'r2', plan_id: 'p2', title: 'Kuchen', amount: 0.2 }] };
+  const items = [
+    { id: 'a', name: 'Mehl', amount: 300, unit: 'EL', checked: false, sources: [] },
+    { id: 'b', name: 'Mehl', amount: 300, unit: 'g', checked: true, sources: [] },
+    { id: 'c', name: 'Mehl', amount: 300, unit: 'g', checked: false, sources: [{ recipe_id: 'r1', title: 'Bananenbrot', amount: 300 }] },
+  ];
+  const hit = findConflict(add, items);
+  assert.equal(hit.id, 'c');
+  assert.deepEqual(mergeInto(hit, add), {
+    amount: 500,
+    sources: [
+      { recipe_id: 'r1', title: 'Bananenbrot', amount: 300 },
+      { recipe_id: 'r2', plan_id: 'p2', title: 'Kuchen', amount: 200 },
+    ],
+  });
+  assert.equal(findConflict({ ...add, name: 'Zucker' }, items), null);
+});
+
+test('Rezept aus der Liste entfernen', () => {
+  const items = [
+    { id: '1', name: 'Mehl', amount: 500, unit: 'g', manual: false, sources: [
+      { recipe_id: 'r1', title: 'Bananenbrot', amount: 300 }, { recipe_id: 'r2', title: 'Kuchen', amount: 200 }] },
+    { id: '2', name: 'Bananen', amount: 3, unit: '', manual: false, sources: [{ recipe_id: 'r1', title: 'Bananenbrot', amount: 3 }] },
+    { id: '3', name: 'Milch', amount: 1, unit: 'l', manual: true, sources: [] },
+    { id: '4', name: 'Eier', amount: 10, unit: '', manual: true, sources: [{ recipe_id: 'r1', title: 'Bananenbrot', amount: 4 }] },
+  ];
+  assert.deepEqual(recipesOnList(items), [{ recipe_id: 'r1', title: 'Bananenbrot' }, { recipe_id: 'r2', title: 'Kuchen' }]);
+  const { updates, deletes } = removeRecipe(items, 'r1');
+  assert.deepEqual(deletes, ['2']);
+  assert.deepEqual(updates, [
+    { id: '1', amount: 200, sources: [{ recipe_id: 'r2', title: 'Kuchen', amount: 200 }] },
+    { id: '4', amount: 6, sources: [] },
+  ]);
+});
+
+test('Plan-Einträge auf der Liste und Anzeige', () => {
+  assert.deepEqual([...plannedIds([{ sources: [{ plan_id: 'p1' }, { plan_id: null }] }, { sources: [{ plan_id: 'p2' }] }])], ['p1', 'p2']);
+  assert.equal(formatItemQuantity({ amount: 1500, unit: 'g' }), '1½ kg');
+  assert.equal(formatItemQuantity({ amount: 250, unit: 'ml' }), '250 ml');
+  assert.equal(formatItemQuantity({ amount: null, unit: '' }), '');
+  assert.equal(formatItemQuantity({ amount: '2', unit: '' }), '2');
+});
