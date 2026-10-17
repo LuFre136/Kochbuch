@@ -108,26 +108,25 @@ label small, .hint { font-weight: 400; color: var(--muted); font-size: 0.875rem;
 .chip.active { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 span.chip { cursor: default; background: var(--surface-2); }
 
-/* Alternativrezepte: Leiste mit den Titeln über dem Rezept */
-.alts {
-  display: grid; gap: 6px; margin: 0 0 14px; padding: 10px 12px;
-  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius);
+/* Rezept als Karte; Alternativen liegen als Stapel dahinter, in Wischrichtung */
+.stack { position: relative; margin-bottom: 14px; }
+.stack.has-prev { padding-left: 18px; }
+.stack.has-next { padding-right: 18px; }
+.recipe-card {
+  position: relative; z-index: 1; padding: 14px 16px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow);
 }
-.alt-title { margin: 0; font-size: 0.85rem; font-weight: 600; color: var(--muted); }
-.alt-row { display: flex; align-items: center; gap: 8px; }
-.alt-tabs {
-  display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none;
-  margin: 0 -2px; padding: 2px; scroll-snap-type: x proximity;
+.recipe-card h1 { margin: 0 0 6px; }
+.recipe-card .chips { margin-bottom: 0; }
+.stack-at { margin: 10px 0 0; color: var(--muted); font-size: 0.8rem; }
+.stack-edge {
+  position: absolute; top: 12px; bottom: 12px; width: 34px; padding: 0;
+  display: grid; align-items: center; cursor: pointer;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--muted);
+  font: inherit; font-size: 1.2rem; line-height: 1;
 }
-.alt-tabs::-webkit-scrollbar { display: none; }
-.alt-tabs .chip { flex: none; scroll-snap-align: center; }
-.alt-tabs .chip small { opacity: 0.7; font-size: 0.75rem; }
-.alts .alt-nav {
-  flex: none; width: 32px; height: 32px; border-radius: 999px; border: 1px solid var(--border);
-  background: var(--surface); color: var(--text); font: inherit; font-size: 1.1rem; line-height: 1; cursor: pointer;
-}
-.alts .alt-nav[disabled] { opacity: 0.35; cursor: default; }
-.alts small { color: var(--muted); font-size: 0.8rem; }
+.stack-edge.prev { left: 0; border-radius: var(--radius) 0 0 var(--radius); justify-items: start; padding-left: 2px; }
+.stack-edge.next { right: 0; border-radius: 0 var(--radius) var(--radius) 0; justify-items: end; padding-right: 2px; }
 .swipe-hint {
   margin: -8px 0 14px; padding: 8px 12px; border-radius: var(--radius); cursor: pointer;
   background: var(--surface-2); border: 1px dashed var(--border); color: var(--muted); font-size: 0.875rem; text-align: center;
@@ -139,12 +138,22 @@ span.chip { cursor: default; background: var(--surface-2); }
   border-radius: 999px; background: var(--accent); color: #fff; font-size: 0.75rem; font-weight: 700;
   vertical-align: middle;
 }
-.card.stacked, .suggestion.stacked { position: relative; }
-.card.stacked::after, .suggestion.stacked::after {
+.suggestion.stacked { position: relative; }
+.suggestion.stacked::after {
   content: ''; position: absolute; inset: 6px -5px -5px 6px; z-index: -1;
   background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius);
 }
 .grid, .suggestions { isolation: isolate; }
+/* Übersicht: zwei Kartenränder unter der Karte zeigen die Alternativen. Sie liegen
+   innerhalb der Karte, weil der Wisch-Rahmen darüber alles abschneidet. */
+.card.stacked::after, .card.stacked::before {
+  content: ''; display: block; height: 7px;
+  background: var(--surface-2); border: 1px solid var(--border); border-top: 0;
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.card.stacked::after { order: 1; margin: 0 6px; }
+.card.stacked::before { order: 2; margin: 0 14px; opacity: 0.75; }
+.card.stacked .card-body { padding-bottom: 10px; }
 
 .chip.add { border-style: dashed; }
 

@@ -869,9 +869,9 @@ function enableRecipeSwipe(el, go) {
 const ALT_HINT = 'altHintSeen';
 function showAltHint() {
   try { if (localStorage.getItem(ALT_HINT)) return; } catch { return; }
-  const nav = $('.alts');
-  if (!nav) return;
-  nav.insertAdjacentHTML('afterend', `<p class="swipe-hint" id="alt-hint">← Wisch über das Rezept oder tippe oben auf einen Titel, um die Alternativen zu sehen. →</p>`);
+  const stack = $('.stack');
+  if (!stack) return;
+  stack.insertAdjacentHTML('afterend', `<p class="swipe-hint" id="alt-hint">← Wisch über das Rezept oder tippe auf den Rand der Karte dahinter, um die Alternativen zu sehen. →</p>`);
   $('#alt-hint').onclick = seenAltHint;
 }
 function seenAltHint() {
@@ -953,6 +953,10 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
     <iframe id="video" src="${esc(embedUrl(v, location.origin, start))}" title="Video zum Rezept"
       allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`;
   const mediaHtml = (t, start = null) => (t.video ? videoHtml(t.video, start) : galleryHtml());
+  // Alternativen liegen als Kartenstapel hinter der aktuellen Karte: in die Richtungen,
+  // in die auch gewischt werden kann.
+  const prev = index > 0 ? group[index - 1] : null;
+  const next = index < group.length - 1 ? group[index + 1] : null;
 
   app.innerHTML = `
     <article class="recipe">
@@ -961,26 +965,24 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
       ${shown ? `${tabs.length > 1 ? `<div class="media-tabs" id="media-tabs" role="tablist">${tabs.map((t, i) => `<button type="button" class="chip${i === 0 ? ' active' : ''}"
         data-media="${esc(t.key)}" role="tab" aria-selected="${i === 0}">${esc(t.label)}</button>`).join('')}</div>` : ''}
       <div class="media" id="media-box">${mediaHtml(shown)}</div>` : ''}
-      ${group.length > 1 ? `<nav class="alts" aria-label="Alternativrezepte">
-        <p class="alt-title">${group.length - 1 === 1 ? 'Dieses Rezept hat eine Alternative' : `Dieses Rezept hat ${group.length - 1} Alternativen`}</p>
-        <div class="alt-row">
-          <button type="button" class="alt-nav" data-step="-1" aria-label="Vorheriges Rezept"${index === 0 ? ' disabled' : ''}>‹</button>
-          <div class="alt-tabs" role="tablist">${group.map((x, i) => `<button type="button" class="chip${i === index ? ' active' : ''}"
-            data-alt="${i}" role="tab" aria-selected="${i === index}">${esc(x.title)}${i === 0 ? ' <small>Haupt</small>' : ''}</button>`).join('')}</div>
-          <button type="button" class="alt-nav" data-step="1" aria-label="Nächstes Rezept"${index === group.length - 1 ? ' disabled' : ''}>›</button>
-        </div>
-        <small>${index === 0 ? 'Hauptrezept' : `Alternative ${index} von ${group.length - 1}`} · antippen oder wischen zum Wechseln</small>
-      </nav>` : ''}
-      <h1>${esc(r.title)}</h1>
-      ${own ? `<div class="stars" role="group" aria-label="Bewertung">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-star="${n}" class="${(r.rating ?? 0) >= n ? 'on' : ''}" aria-label="${n} von 5 Sternen" aria-pressed="${r.rating === n}">★</button>`).join('')}</div>`
+      <div class="stack${prev ? ' has-prev' : ''}${next ? ' has-next' : ''}">
+        ${prev ? `<button type="button" class="stack-edge prev" data-alt="${index - 1}" aria-label="Zurück zu „${esc(prev.title)}“"><span>‹</span></button>` : ''}
+        ${next ? `<button type="button" class="stack-edge next" data-alt="${index + 1}" aria-label="Weiter zu „${esc(next.title)}“"><span>›</span></button>` : ''}
+        <div class="recipe-card">
+          <h1>${esc(r.title)}</h1>
+          ${own ? `<div class="stars" role="group" aria-label="Bewertung">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-star="${n}" class="${(r.rating ?? 0) >= n ? 'on' : ''}" aria-label="${n} von 5 Sternen" aria-pressed="${r.rating === n}">★</button>`).join('')}</div>`
     : r.rating ? `<div class="stars readonly" aria-label="${r.rating} von 5 Sternen">${'★'.repeat(r.rating)}${'☆'.repeat(5 - r.rating)}</div>` : ''}
+          ${r.description ? `<p class="lead">${esc(r.description)}</p>` : ''}
+          ${r.tags.length ? `<div class="chips static">${r.tags.map((t) => `<span class="chip">${esc(t)}</span>`).join('')}</div>` : ''}
+          ${r.total_minutes != null || r.cook_minutes != null ? `<dl class="times">
+            ${r.total_minutes != null ? `<div><dt>Gesamtzeit</dt><dd>${formatMinutes(r.total_minutes)}</dd></div>` : ''}
+            ${r.cook_minutes != null ? `<div><dt>Koch-/Backzeit</dt><dd>${formatMinutes(r.cook_minutes)}</dd></div>` : ''}
+          </dl>` : ''}
+          ${group.length > 1 ? `<p class="stack-at">${index === 0 ? 'Hauptrezept' : `Alternative ${index} von ${group.length - 1}`}
+            · ${group.length - 1 === 1 ? 'eine Alternative' : `${group.length - 1} Alternativen`} · wischen oder auf den Rand tippen</p>` : ''}
+        </div>
+      </div>
       ${own ? '<div id="planned"></div>' : ''}
-      ${r.description ? `<p class="lead">${esc(r.description)}</p>` : ''}
-      ${r.tags.length ? `<div class="chips static">${r.tags.map((t) => `<span class="chip">${esc(t)}</span>`).join('')}</div>` : ''}
-      ${r.total_minutes != null || r.cook_minutes != null ? `<dl class="times">
-        ${r.total_minutes != null ? `<div><dt>Gesamtzeit</dt><dd>${formatMinutes(r.total_minutes)}</dd></div>` : ''}
-        ${r.cook_minutes != null ? `<div><dt>Koch-/Backzeit</dt><dd>${formatMinutes(r.cook_minutes)}</dd></div>` : ''}
-      </dl>` : ''}
 
       ${r.ingredients.length ? `<section>
         <div class="section-head">
@@ -1031,12 +1033,9 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
       if (next < 0 || next >= group.length) return;
       location.hash = hrefOf(next);
     };
-    app.querySelectorAll('.alt-nav').forEach((b) => { b.onclick = () => go(Number(b.dataset.step)); });
-    app.querySelectorAll('.alt-tabs [data-alt]').forEach((b) => {
+    app.querySelectorAll('.stack-edge[data-alt]').forEach((b) => {
       b.onclick = () => { seenAltHint(); location.hash = hrefOf(Number(b.dataset.alt)); };
     });
-    // Der aktive Reiter soll zu sehen sein, auch wenn die Leiste seitlich scrollt.
-    app.querySelector('.alt-tabs .chip.active')?.scrollIntoView({ block: 'nearest', inline: 'center' });
     enableRecipeSwipe($('.recipe'), (step) => { seenAltHint(); go(step); });
     showAltHint();
   }
