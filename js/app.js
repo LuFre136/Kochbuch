@@ -15,7 +15,7 @@ import {
   dropMissingTimes, makeStep, formatTime,
 } from './video.js';
 import {
-  pairOf, alternativeIds, alternativeGroup, suggestAlternatives,
+  pairOf, alternativeIds, alternativeGroup, suggestAlternatives, relatedAlternatives,
 } from './alternatives.js';
 import {
   ingredientsFromStep, remainingIngredients, ingredientKey, mentionsIngredient,
@@ -1382,9 +1382,9 @@ async function renderCombine(mainId) {
 
   $('#combine-add').onclick = async () => {
     const taken = new Set(chosen.map((x) => x.id));
-    const picked2 = await chooseRecipeSheet(all.filter((x) => !taken.has(x.id)), new Map());
+    const picked2 = await pickRecipeSheet(all.filter((x) => !taken.has(x.id)), 'Rezept zum Kombinieren');
     if (!picked2) return;
-    const r = all.find((x) => x.id === picked2.id);
+    const r = all.find((x) => x.id === picked2);
     if (r) { chosen.push(r); active = r.id; }
     drawAll();
   };
@@ -1443,44 +1443,151 @@ async function askDeleteSources(sources) {
   toast(own.length === 1 ? 'Ausgangsrezept gelöscht' : 'Ausgangsrezepte gelöscht');
 }
 
-// Rezept-Auswahl mit Suchfeld. Liefert { id, withGroup } oder null. withGroup = true,
-// wenn auch alle Alternativen des gewählten Rezepts übernommen werden sollen.
-function chooseRecipeSheet(candidates, altCount) {
+// Vollbild-Auswahl. Der Hintergrund wird festgestellt, damit nicht versehentlich im
+// Rezept dahinter gescrollt wird; gescrollt wird nur in der Trefferliste.
+function openPicker(title, body) {
+  const dialog = document.createElement('dialog');
+  dialog.className = 'sheet full';
+  dialog.innerHTML = `<form method="dialog" class="picker">
+    <header class="picker-head">
+      <button class="icon-btn" value="back" formnovalidate aria-label="Zurück">←</button>
+      <h2>${esc(title)}</h2>
+    </header>
+    ${body}
+  </form>`;
+  document.body.append(dialog);
+  document.documentElement.classList.add('sheet-open');
+  dialog.addEventListener('close', () => {
+    dialog.remove();
+    if (!document.querySelector('dialog[open]')) document.documentElement.classList.remove('sheet-open');
+  });
+  dialog.showModal();
+  return dialog;
+}
+
+// Zeile in einer Trefferliste: ein Rezept zum Antippen, mit Zusatz und Haken.
+const pickRow = (r, { note = '', on = false, extra = '' } = {}) => `<div class="pick-item">
+  <button type="button" class="pick-row${on ? ' on' : ''}" data-pick="${esc(r.id)}" aria-pressed="${on}">
+    <span>${esc(r.title)}${note ? `<small>${esc(note)}</small>` : ''}</span>
+    <span class="pick-mark">${on ? '✓' : '+'}</span>
+  </button>${extra}</div>`;
+
+// Ein Rezept auswählen, z. B. zum Kombinieren. Liefert die Kennung oder null.
+function pickRecipeSheet(candidates, title = 'Rezept wählen') {
   return new Promise((resolve) => {
-    const dialog = document.createElement('dialog');
-    dialog.className = 'sheet';
-    dialog.innerHTML = `<form method="dialog" class="sheet-form">
-      <h2>Rezept als Alternative</h2>
-      <input id="alt-q" type="search" placeholder="Titel oder Tag" autocomplete="off" enterkeyhint="search">
-      <div class="choices alt-hits" id="alt-hits"></div>
-      <div class="row"><button class="btn ghost" value="cancel" formnovalidate>Abbrechen</button></div>
-    </form>`;
-    document.body.append(dialog);
-    const input = dialog.querySelector('#alt-q');
-    const hits = dialog.querySelector('#alt-hits');
+    const dialog = openPicker(title, `<input id="pick-q" type="search" placeholder="Titel oder Tag" autocomplete="off" enterkeyhint="search">
+      <div class="pick-list" id="pick-hits"></div>`);
+    const input = dialog.querySelector('#pick-q');
+    const hits = dialog.querySelector('#pick-hits');
+    let picked = null;
     const draw = () => {
       const q = input.value.trim().toLowerCase();
       const found = candidates
         .filter((r) => !q || r.title.toLowerCase().includes(q) || r.tags.some((t) => t.toLowerCase().includes(q)))
-        .slice(0, 20);
-      hits.innerHTML = found.length ? found.map((r) => {
-        const n = altCount.get(r.id) ?? 0;
-        return `<div class="alt-hit"><button type="button" class="btn ghost" data-pick="${esc(r.id)}">${esc(r.title)}</button>
-          ${n ? `<button type="button" class="link" data-group="${esc(r.id)}">+ alle ${n} ${n === 1 ? 'Alternative' : 'Alternativen'} von „${esc(r.title)}“ übernehmen</button>` : ''}</div>`;
-      }).join('') : '<p class="hint">Kein Rezept gefunden.</p>';
+        .slice(0, 30);
+      hits.innerHTML = found.length ? found.map((r) => pickRow(r)).join('') : '<p class="hint">Kein Rezept gefunden.</p>';
       hits.querySelectorAll('[data-pick]').forEach((b) => {
-        b.onclick = () => { done({ id: b.dataset.pick, withGroup: false }); };
-      });
-      hits.querySelectorAll('[data-group]').forEach((b) => {
-        b.onclick = () => { done({ id: b.dataset.group, withGroup: true }); };
+        b.onclick = () => { picked = b.dataset.pick; dialog.close(); };
       });
     };
-    let result = null;
-    const done = (r) => { result = r; dialog.close(); };
     input.oninput = draw;
     draw();
-    dialog.addEventListener('close', () => { dialog.remove(); resolve(result); });
-    dialog.showModal();
+    dialog.addEventListener('close', () => resolve(picked));
+  });
+}
+
+// Alternativen verwalten: drei Reiter, bleibt nach einer Auswahl offen und fragt nach,
+// wenn das gewählte Rezept selbst Alternativen hat. Liefert die verknüpften Kennungen.
+function alternativesSheet({ selfId, tags, candidates, linked }) {
+  return new Promise((resolve) => {
+    const byId = new Map(candidates.map((r) => [r.id, r]));
+    let chosen = [...linked];
+    let tab = 'tags';
+    let ask = null; // Kennung des Rezepts, zu dessen Gruppe gerade gefragt wird
+    const dialog = openPicker('Alternative hinzufügen', `
+      <div class="chips" id="alt-tabs"></div>
+      <input id="alt-q" type="search" placeholder="Titel oder Tag" autocomplete="off" enterkeyhint="search" hidden>
+      <div class="pick-list" id="alt-hits"></div>
+      <footer class="picker-foot">
+        <div class="chips static" id="alt-chosen"></div>
+        <button class="btn primary" value="done">Fertig</button>
+      </footer>`);
+    const input = dialog.querySelector('#alt-q');
+    const hits = dialog.querySelector('#alt-hits');
+
+    // Vorschläge nach gemeinsamen Tags; schon verknüpfte stehen mit Haken dabei.
+    const byTags = () => suggestAlternatives({ id: selfId, tags }, candidates, [], { limit: 50, compare: collator.compare });
+    // Alternativen der schon verknüpften Rezepte, also die Gruppe einen Schritt weiter.
+    const related = () => relatedAlternatives(links, selfId, chosen)
+      .filter((x) => byId.has(x.id))
+      .map((x) => ({ r: byId.get(x.id), note: `über ${byId.get(x.via)?.title ?? 'eine Alternative'}` }));
+    const byTitle = () => {
+      const q = input.value.trim().toLowerCase();
+      return candidates
+        .filter((r) => !q || r.title.toLowerCase().includes(q) || r.tags.some((t) => t.toLowerCase().includes(q)))
+        .slice(0, 30);
+    };
+
+    const drawTabs = () => {
+      const counts = { tags: byTags().length, verwandte: related().length, titel: candidates.length };
+      const label = { tags: 'Tags', verwandte: 'Verwandte', titel: 'Titel' };
+      dialog.querySelector('#alt-tabs').innerHTML = ['tags', 'verwandte', 'titel'].map((t) => `<button type="button"
+        class="chip${t === tab ? ' active' : ''}" data-tab="${t}"${counts[t] ? '' : ' disabled'}>${label[t]}</button>`).join('');
+      dialog.querySelectorAll('[data-tab]').forEach((b) => {
+        b.onclick = () => { tab = b.dataset.tab; ask = null; drawAll(); };
+      });
+    };
+
+    const drawChosen = () => {
+      dialog.querySelector('#alt-chosen').innerHTML = chosen.length
+        ? `<span class="hint">Verknüpft:</span>${chosen.map((id) => `<span class="chip tag-chip">${esc(byId.get(id)?.title ?? 'Rezept')}
+            <button type="button" data-off="${esc(id)}" aria-label="Verknüpfung lösen">×</button></span>`).join('')}`
+        : '<span class="hint">Noch keine Alternative verknüpft.</span>';
+      dialog.querySelectorAll('[data-off]').forEach((b) => {
+        b.onclick = () => { chosen = chosen.filter((x) => x !== b.dataset.off); ask = null; drawAll(); };
+      });
+    };
+
+    const drawHits = () => {
+      const list = tab === 'verwandte' ? related() : (tab === 'tags' ? byTags() : byTitle()).map((r) => ({ r, note: '' }));
+      input.hidden = tab !== 'titel';
+      hits.innerHTML = list.length ? list.map(({ r, note }) => {
+        const on = chosen.includes(r.id);
+        // Nachfrage nach der ganzen Gruppe, direkt unter dem gewählten Rezept.
+        const group = alternativeIds(links, r.id).filter((x) => x !== selfId && !chosen.includes(x));
+        const extra = ask === r.id && group.length ? `<div class="pick-ask">
+          <p>„${esc(r.title)}“ hat ${group.length === 1 ? 'eine weitere Alternative' : `${group.length} weitere Alternativen`}. Auch verknüpfen?</p>
+          <div class="row"><button type="button" class="btn small primary" data-group="${esc(r.id)}">Alle ${group.length + 1} verknüpfen</button>
+            <button type="button" class="btn small ghost" data-only="${esc(r.id)}">Nur „${esc(r.title)}“</button></div></div>` : '';
+        return pickRow(r, { note, on, extra });
+      }).join('') : `<p class="hint">${tab === 'verwandte'
+        ? 'Die verknüpften Rezepte haben selbst keine weiteren Alternativen.'
+        : tab === 'tags' ? 'Keine Vorschläge – die Tags passen zu keinem anderen Rezept. Suche unter „Titel“.' : 'Kein Rezept gefunden.'}</p>`;
+
+      hits.querySelectorAll('[data-pick]').forEach((b) => {
+        b.onclick = () => {
+          const id = b.dataset.pick;
+          if (chosen.includes(id)) { chosen = chosen.filter((x) => x !== id); ask = null; }
+          else { chosen = [...chosen, id]; ask = id; }
+          drawAll();
+        };
+      });
+      hits.querySelectorAll('[data-group]').forEach((b) => {
+        b.onclick = () => {
+          const add = alternativeIds(links, b.dataset.group).filter((x) => x !== selfId);
+          chosen = [...new Set([...chosen, ...add])];
+          ask = null;
+          drawAll();
+        };
+      });
+      hits.querySelectorAll('[data-only]').forEach((b) => { b.onclick = () => { ask = null; drawAll(); }; });
+    };
+
+    const drawAll = () => { drawTabs(); drawHits(); drawChosen(); };
+    if (!byTags().length) tab = 'titel';
+    input.oninput = drawHits;
+    drawAll();
+    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'back' ? null : chosen));
   });
 }
 
@@ -1506,7 +1613,7 @@ async function renderEditor(id) {
 
   app.innerHTML = `
     <form class="editor" id="editor">
-      <a class="back" href="${existing ? `#/r/${existing.id}` : '#/'}">← Abbrechen</a>
+      <a class="back" href="${existing ? `#/r/${existing.id}` : '#/'}">← ${existing ? 'Zum Rezept' : 'Zur Übersicht'}</a>
       <h1>${existing ? 'Rezept bearbeiten' : combined ? 'Kombiniertes Rezept' : 'Neues Rezept'}</h1>
 
       ${existing || combined ? '' : `<div class="import card-panel">
@@ -1748,13 +1855,14 @@ async function renderEditor(id) {
   const altAdd = $('#alt-add');
   if (altAdd) {
     altAdd.onclick = async () => {
-      const hidden = new Set([existing?.id, ...altIds]);
-      const candidates = own.filter((x) => !hidden.has(x.id));
-      const altCount = new Map(candidates.map((x) => [x.id, alternativeIds(links, x.id).filter((o) => !hidden.has(o) && o !== existing?.id).length]));
-      const picked = await chooseRecipeSheet(candidates, altCount);
+      const picked = await alternativesSheet({
+        selfId: existing?.id ?? '',
+        tags,
+        candidates: own.filter((x) => x.id !== existing?.id),
+        linked: altIds,
+      });
       if (!picked) return;
-      const add = [picked.id, ...(picked.withGroup ? alternativeIds(links, picked.id) : [])];
-      altIds = [...new Set([...altIds, ...add])].filter((x) => x !== existing?.id);
+      altIds = picked.filter((x) => x !== existing?.id);
       drawAlts();
     };
   }
@@ -2052,9 +2160,12 @@ function openSheet(html) {
     dialog.className = 'sheet';
     dialog.innerHTML = `<form method="dialog" class="sheet-form">${html}</form>`;
     document.body.append(dialog);
+    // Solange ein Dialog offen ist, wird dahinter nicht gescrollt.
+    document.documentElement.classList.add('sheet-open');
     dialog.addEventListener('close', () => {
       resolve({ value: dialog.returnValue, form: dialog.querySelector('form') });
       dialog.remove();
+      if (!document.querySelector('dialog[open]')) document.documentElement.classList.remove('sheet-open');
     });
     dialog.showModal();
   });
@@ -2068,8 +2179,9 @@ async function chooseList(lists) {
   const { value, form } = await openSheet(`<h2>Auf welche Liste?</h2>
     <div class="choices">${lists.map((l, i) => `<label class="check"><input type="radio" name="list" value="${l.id}"
       ${l.id === current || (!lists.some((x) => x.id === current) && i === 0) ? 'checked' : ''}> ${esc(listLabel(l))}</label>`).join('')}</div>
+    <p class="hint">Das Rezept ist schon eingeplant; hier geht es nur um die Zutaten.</p>
     <div class="row"><button class="btn primary" value="ok">Weiter</button>
-      <button class="btn ghost" value="cancel" formnovalidate>Abbrechen</button></div>`);
+      <button class="btn ghost" value="cancel" formnovalidate>Überspringen</button></div>`);
   if (value !== 'ok') return null;
   return lists.find((l) => l.id === form.list.value) ?? null;
 }

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  pairOf, alternativeIds, isLinked, alternativeGroup, suggestAlternatives,
+  pairOf, alternativeIds, isLinked, alternativeGroup, suggestAlternatives, relatedAlternatives,
 } from '../js/alternatives.js';
 
 const compare = new Intl.Collator('de', { sensitivity: 'base' }).compare;
@@ -55,4 +55,13 @@ test('schlägt sich selbst und schon Verknüpftes nicht vor', () => {
 test('ohne eigene Tags gibt es keine Vorschläge', () => {
   const found = suggestAlternatives(recipe('a', 'Lasagne'), [recipe('b', 'Auflauf', ['Ofen'])], [], { compare });
   assert.deepEqual(found, []);
+});
+
+test('findet die Alternativen der Alternativen („Verwandte“)', () => {
+  // a ist verknüpft mit b; b hängt an c und d, c hängt auch an e.
+  const links = [pairOf('a', 'b'), pairOf('b', 'c'), pairOf('b', 'd'), pairOf('c', 'e')];
+  assert.deepEqual(relatedAlternatives(links, 'a', ['b']), [{ id: 'c', via: 'b' }, { id: 'd', via: 'b' }]);
+  // Was schon verknüpft ist, kommt nicht noch einmal; dafür jetzt e über c.
+  assert.deepEqual(relatedAlternatives(links, 'a', ['b', 'c']), [{ id: 'd', via: 'b' }, { id: 'e', via: 'c' }]);
+  assert.deepEqual(relatedAlternatives(links, 'a', []), []);
 });

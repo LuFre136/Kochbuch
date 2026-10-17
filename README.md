@@ -33,7 +33,7 @@ Jede Zutat hat eine Kategorie (Obst, Gemüse, Fleisch & Wurst …). Kommt eine Z
 
 ## Alternativrezepte
 
-Zu einem Rezept lassen sich andere Rezepte als Alternative hinterlegen (im Rezept auf „Bearbeiten“, Abschnitt *Alternativen*). Eine Verknüpfung gilt immer in beide Richtungen: hängt B als Alternative an A, erscheint A auch bei B. „+ Alternative“ sucht über Titel und Tags; hat ein gefundenes Rezept selbst Alternativen, lassen sich mit einem Tipp alle übernehmen. Darunter schlägt die App Rezepte mit gemeinsamen Tags vor.
+Zu einem Rezept lassen sich andere Rezepte als Alternative hinterlegen (im Rezept auf „Bearbeiten“, Abschnitt *Alternativen*). Eine Verknüpfung gilt immer in beide Richtungen: hängt B als Alternative an A, erscheint A auch bei B. „+ Alternative“ öffnet eine Auswahlseite über den ganzen Bildschirm mit drei Reitern: **Tags** (Rezepte mit gemeinsamen Tags, die meisten Überschneidungen zuerst), **Verwandte** (die Alternativen der schon verknüpften Rezepte) und **Titel** (freie Suche). Ein Tipp verknüpft, ein zweiter löst wieder; die Seite bleibt offen, bis man auf „Fertig“ tippt – der Zurück-Pfeil oben links verwirft. Hat ein gewähltes Rezept selbst Alternativen, fragt die Seite direkt darunter, ob die ganze Gruppe mit soll.
 
 In der Rezeptansicht steht über dem Titel eine Leiste mit den Titeln aller Rezepte der Gruppe; ein Tipp darauf wechselt, ebenso Wischen nach links oder rechts und die Pfeile. Beim ersten Mal erklärt ein Hinweis das Wischen; er verschwindet, sobald einmal gewechselt wurde. In der Übersicht, in „Was kochen?“, im Saisonkalender und im Plan tragen Rezepte mit Alternativen ein „+1“, „+2“ … und liegen wie ein kleiner Kartenstapel.
 
