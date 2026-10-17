@@ -7,6 +7,10 @@
 // Antwort: { title, description, tags, servings, total_minutes, cook_minutes,
 //            ingredients: string[], steps: string[], notes, source, image } (image als data:-URL)
 //
+// Bei TikTok liest die Funktion zuerst die Videoseite: gibt es Untertitel (WebVTT), macht
+// Gemini daraus ein Rezept mit Zeitstempeln; bei Foto-Posts wertet es die Bilder aus; sonst
+// bleibt die Bildunterschrift. Welcher Weg es war, steht in ai_from.
+//
 // Videos (YouTube, YouTube Shorts, TikTok) wertet Google Gemini aus. Dann sind Schritte
 // { text, t } mit t = Sekunden im Video, und die Antwort enthält zusätzlich
 // video: { provider, id } und ai: 'ok' | 'none' | 'failed' (+ ai_error).
@@ -404,6 +408,127 @@ async function tiktokMeta(url: string): Promise<VideoMeta> {
   return { title: firstLine || `TikTok von ${cleanText(o.author_name)}`, description: caption, tags: [], thumbnail: (o.thumbnail_url as string) ?? null, seconds: null };
 }
 
+const MAX_PHOTOS = 6;
+
+// ---------- TikTok: Untertitel und Foto-Posts von der Videoseite ----------
+
+// Die TikTok-Videoseite bringt ihre Daten als JSON in einem <script> mit. Je nach Version
+// heißt es __UNIVERSAL_DATA_FOR_REHYDRATION__ oder SIGI_STATE; beide werden gelesen.
+const TIKTOK_SCRIPTS = /<script[^>]+id="(?:__UNIVERSAL_DATA_FOR_REHYDRATION__|SIGI_STATE)"[^>]*>([\s\S]*?)<\/script>/g;
+
+export interface TikTokPost {
+  caption: string;
+  seconds: number | null;
+  subtitles: { url: string; language: string }[];
+  images: string[];
+}
+
+// Sucht im JSON der Seite das Objekt mit den Angaben zum Beitrag. Gesucht wird nach Inhalt
+// (desc plus video oder imagePost), nicht nach einem festen Pfad, damit kleine Umbauten der
+// Seite den Import nicht gleich lahmlegen.
+function findPost(data: unknown, depth = 0): Record<string, unknown> | null {
+  if (!data || typeof data !== 'object' || depth > 12) return null;
+  const node = data as Record<string, unknown>;
+  if (typeof node.desc === 'string' && (node.video || node.imagePost)) return node;
+  for (const value of Object.values(node)) {
+    const found = findPost(value, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+const urlList = (v: unknown): string[] => (Array.isArray((v as Record<string, unknown>)?.urlList)
+  ? ((v as Record<string, unknown>).urlList as unknown[]).map(String).filter(isAllowedUrl)
+  : []);
+
+// Liest Bildunterschrift, Untertitel-Dateien und (bei Foto-Posts) die Bilder aus der Seite.
+export function parseTikTokPage(html: string): TikTokPost | null {
+  for (const m of html.matchAll(TIKTOK_SCRIPTS)) {
+    let data: unknown;
+    try { data = JSON.parse(m[1]); } catch { continue; }
+    const post = findPost(data);
+    if (!post) continue;
+    const video = (post.video ?? {}) as Record<string, unknown>;
+    const infos = Array.isArray(video.subtitleInfos) ? video.subtitleInfos as Record<string, unknown>[] : [];
+    const subtitles = infos
+      // WebVTT lässt sich lesen; andere Formate (z. B. creator_caption als JSON) werden übergangen.
+      .filter((i) => /webvtt|vtt/i.test(String(i.Format ?? i.format ?? '')) || /\.vtt/i.test(String(i.Url ?? i.url ?? '')))
+      .map((i) => ({ url: String(i.Url ?? i.url ?? ''), language: String(i.LanguageCodeName ?? i.languageCodeName ?? '') }))
+      .filter((i) => isAllowedUrl(i.url));
+    const post2 = (post.imagePost ?? {}) as Record<string, unknown>;
+    const images = (Array.isArray(post2.images) ? post2.images as Record<string, unknown>[] : [])
+      .flatMap((img) => urlList(img.imageURL ?? img.imageUrl).slice(0, 1));
+    return {
+      caption: cleanText(post.desc),
+      // TikTok gibt die Länge als Sekunden-Zahl an.
+      seconds: parseTimestamp(video.duration) || null,
+      subtitles,
+      images,
+    };
+  }
+  return null;
+}
+
+// Deutsch zuerst, dann Englisch, dann der Rest: so steht das Rezept möglichst in der
+// Sprache, in der es gesprochen wurde.
+export function pickSubtitle(subtitles: { url: string; language: string }[]): string | null {
+  const rank = (l: string) => (/^de/i.test(l) ? 0 : /^en/i.test(l) ? 1 : 2);
+  return [...subtitles].sort((a, b) => rank(a.language) - rank(b.language))[0]?.url ?? null;
+}
+
+const VTT_TIME = /(?:(\d+):)?(\d{1,2}):(\d{2})(?:[.,](\d{1,3}))?\s*-->/;
+
+// Macht aus einer WebVTT-Datei Zeilen wie "0:12 Zwiebeln anbraten", damit die KI daraus
+// Schritte mit Zeitstempeln bauen kann. Wiederholungen (TikTok zeigt Untertitel oft
+// mehrfach) fallen weg.
+export function subtitlesToLines(vtt: string, maxLines = 400): string[] {
+  const lines: string[] = [];
+  let time: number | null = null;
+  let text: string[] = [];
+  const flush = () => {
+    const t = cleanText(text.join(' '));
+    if (time != null && t && lines[lines.length - 1]?.endsWith(t) !== true) {
+      const m = Math.floor(time / 60);
+      lines.push(`${m}:${String(time % 60).padStart(2, '0')} ${t}`);
+    }
+    time = null;
+    text = [];
+  };
+  for (const raw of String(vtt).split(/\r?\n/)) {
+    const line = raw.trim();
+    const m = line.match(VTT_TIME);
+    if (m) {
+      flush();
+      time = Number(m[1] ?? 0) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+    } else if (!line || /^(WEBVTT|NOTE|STYLE|REGION)\b/.test(line) || /^\d+$/.test(line)) {
+      if (!line) flush();
+    } else if (time != null) {
+      text.push(decodeEntities(line.replace(/<[^>]*>/g, ' ')));
+    }
+    if (lines.length >= maxLines) break;
+  }
+  flush();
+  return lines;
+}
+
+const MAX_VTT_BYTES = 400_000;
+
+async function fetchText(url: string, limit: number): Promise<string> {
+  const res = await fetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(15_000) });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return new TextDecoder().decode(await readLimited(res, limit));
+}
+
+// Holt die Videoseite von TikTok. Scheitert das (TikTok sperrt Abrufe aus Rechenzentren
+// zeitweise), bleibt es beim Import aus der Bildunterschrift.
+async function tiktokPost(url: string): Promise<TikTokPost | null> {
+  try {
+    return parseTikTokPage(await fetchText(url, MAX_PAGE_BYTES));
+  } catch {
+    return null;
+  }
+}
+
 const AI_SCHEMA = {
   type: 'OBJECT',
   properties: {
@@ -434,13 +559,14 @@ const AI_SCHEMA = {
   required: ['is_recipe', 'title', 'ingredients', 'steps'],
 };
 
-export type AiSource = 'video' | 'text' | 'images' | 'paste';
+export type AiSource = 'video' | 'text' | 'images' | 'paste' | 'subtitles';
 
 const AI_INTRO: Record<AiSource, string> = {
   video: 'Du bekommst ein Kochvideo samt Titel und Beschreibung. Schau dir das ganze Video an (Bild, Ton und eingeblendete Texte) und schreibe das Rezept auf.',
   text: 'Du bekommst Titel und Beschreibung eines Kochvideos. Schreibe das Rezept auf, das darin steht.',
   paste: 'Du bekommst einen Text, in dem ein Rezept steht, z. B. einen Kommentar, eine Nachricht oder Notizen. Schreibe das Rezept auf.',
   images: 'Du bekommst ein oder mehrere Fotos eines Rezepts, z. B. Seiten aus einem Kochbuch oder eine handschriftliche Rezeptkarte. Lies das Rezept vollständig ab (auch Handschrift; mehrere Fotos gehören zu einem Rezept) und schreibe es auf.',
+  subtitles: 'Du bekommst die Untertitel eines Kochvideos, jede Zeile mit der Stelle im Video, dazu Titel und Bildunterschrift. Schreibe das Rezept auf, das darin gesprochen wird.',
 };
 
 export function aiPrompt(meta: VideoMeta | null, source: AiSource): string {
@@ -454,7 +580,9 @@ export function aiPrompt(meta: VideoMeta | null, source: AiSource): string {
       : '- Schritte: in der Reihenfolge des Videos, jeweils ein bis drei kurze Sätze, keine Nummerierung.',
     source === 'video'
       ? '- start: Zeitpunkt im Video im Format M:SS, an dem der Schritt beginnt. Wenn unklar, null.'
-      : '- start: immer null.',
+      : source === 'subtitles'
+        ? '- start: die Zeit vom Anfang der Untertitel-Zeile, in der der Schritt beginnt, im Format M:SS. Wenn unklar, null.'
+        : '- start: immer null.',
     '- servings, total_minutes, cook_minutes nur, wenn sie genannt werden oder sich klar ergeben, sonst null.',
     '- tags: höchstens fünf kurze deutsche Stichworte (z. B. "vegetarisch", "Pasta", "schnell").',
     '- notes: Tipps und Varianten, sonst leer.',
@@ -552,18 +680,52 @@ async function importVideo(video: VideoRef, url: string) {
   const key = env('GEMINI_API_KEY');
   let ai: ReturnType<typeof normalizeAiRecipe> | null = null;
   let aiError = '';
+  let from = '';
   if (key) {
-    const tries: { withVideo: boolean }[] = [];
-    if (video.provider === 'youtube') tries.push({ withVideo: true });
-    if (meta.description) tries.push({ withVideo: false });
-    for (const { withVideo } of tries) {
+    // Mehrere Wege, der beste zuerst; der nächste kommt nur, wenn der vorige scheitert.
+    // deno-lint-ignore no-explicit-any
+    const tries: { parts: any[]; withTimes: boolean; from: string }[] = [];
+    if (video.provider === 'youtube') {
+      tries.push({
+        parts: [{ file_data: { file_uri: `https://www.youtube.com/watch?v=${video.id}` } }, { text: aiPrompt(meta, 'video') }],
+        withTimes: true,
+        from: 'video',
+      });
+    }
+    if (video.provider === 'tiktok') {
+      // Von der TikTok-Seite kommen Untertitel (mit Zeiten) und bei Foto-Posts die Bilder.
+      const post = await tiktokPost(source);
+      if (post) {
+        if (post.seconds) meta.seconds = post.seconds;
+        if (post.caption && !meta.description) meta.description = post.caption;
+        const vtt = pickSubtitle(post.subtitles);
+        if (vtt) {
+          try {
+            const lines = subtitlesToLines(await fetchText(vtt, MAX_VTT_BYTES));
+            if (lines.length) {
+              tries.push({
+                parts: [{ text: `${aiPrompt(meta, 'subtitles')}\n\nUntertitel:\n${lines.join('\n')}` }],
+                withTimes: true,
+                from: 'subtitles',
+              });
+            }
+          } catch { /* ohne Untertitel geht es mit der Bildunterschrift weiter */ }
+        }
+        if (post.images.length) {
+          const photos = (await Promise.all(post.images.slice(0, MAX_PHOTOS).map(fetchImage))).filter(Boolean);
+          const parts = photos.length ? photoParts(photos) : 'keine';
+          // Foto-Posts (mehrere Bilder statt Video) liest Gemini wie Fotos vom Kochbuch.
+          if (typeof parts !== 'string') tries.push({ parts: [...parts, { text: aiPrompt(meta, 'images') }], withTimes: false, from: 'photos' });
+        }
+      }
+    }
+    if (meta.description) tries.push({ parts: [{ text: aiPrompt(meta, 'text') }], withTimes: false, from: 'description' });
+    for (const t of tries) {
       try {
-        const parts = [
-          ...(withVideo ? [{ file_data: { file_uri: `https://www.youtube.com/watch?v=${video.id}` } }] : []),
-          { text: aiPrompt(meta, withVideo ? 'video' : 'text') },
-        ];
-        ai = normalizeAiRecipe(await askGemini(key, parts), meta.seconds, withVideo);
-        break;
+        ai = normalizeAiRecipe(await askGemini(key, t.parts, t.from !== 'photos'), meta.seconds, t.withTimes);
+        if (ai.is_recipe && ai.ingredients.length) { from = t.from; break; }
+        // Kein Rezept gefunden: den nächsten Weg versuchen, aber das Ergebnis behalten.
+        if (!from) from = t.from;
       } catch (err) {
         aiError = (err as Error).message;
         if ((err as Error).name === 'TimeoutError') break; // kein zweiter Versuch, sonst läuft die Funktion zu lange
@@ -590,11 +752,11 @@ async function importVideo(video: VideoRef, url: string) {
     image,
     video,
     ai: !key ? 'none' : ai ? 'ok' : 'failed',
+    ...(found && from ? { ai_from: from } : {}),
     ...(ai ? {} : aiError ? { ai_error: aiError } : {}),
   };
 }
 
-const MAX_PHOTOS = 6;
 const MAX_PHOTO_BYTES = 12_000_000; // Summe der Fotos als Base64
 
 // Prüft die Fotos aus der App: data:-URLs von JPEG, PNG, WebP oder HEIC.
