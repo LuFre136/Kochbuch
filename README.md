@@ -10,7 +10,8 @@ Rezept-App für iPhone und Browser. Läuft komplett kostenlos auf GitHub Pages (
 2. **Login-Weiterleitung:** Unter **Authentication → URL Configuration** als **Site URL** `https://lufre136.github.io/Kochbuch/` eintragen und dieselbe Adresse bei **Redirect URLs** hinzufügen. Sonst führen Bestätigungs-Mails ins Leere.
 3. **Veröffentlichen:** Im GitHub-Repository unter **Settings → Pages** bei *Source* „Deploy from a branch“, Branch `main`, Ordner `/ (root)` wählen. Nach ein bis zwei Minuten ist die App unter `https://lufre136.github.io/Kochbuch/` erreichbar.
 4. **Import per Link einrichten:** Im Supabase-Dashboard **Edge Functions → Deploy a new function → Via Editor** wählen, als Namen `import-recipe` eintragen, den Inhalt von [`supabase/functions/import-recipe/index.ts`](supabase/functions/import-recipe/index.ts) einfügen und auf **Deploy function** klicken. Danach in den Einstellungen der Funktion **Verify JWT** ausschalten (die Funktion prüft die Anmeldung selbst).
-5. **Aufs iPhone:** Die Adresse in Safari öffnen, auf *Teilen* tippen und **Zum Home-Bildschirm** wählen.
+5. **Import aus Videos (YouTube, Shorts, TikTok):** Unter **Edge Functions → Secrets** zwei Secrets anlegen: `GEMINI_API_KEY` (kostenloser Schlüssel aus dem Google AI Studio, wertet das Video aus) und `YOUTUBE_API_KEY` (YouTube Data API v3, liefert Titel und Beschreibung). Ohne `GEMINI_API_KEY` übernimmt der Import nur Titel, Bild, Link und Videobeschreibung. Optional legt `GEMINI_MODEL` das Gemini-Modell fest (Standard: `gemini-flash-latest`).
+6. **Aufs iPhone:** Die Adresse in Safari öffnen, auf *Teilen* tippen und **Zum Home-Bildschirm** wählen.
 
 Die Supabase-Adresse und der Publishable Key stehen in [`js/config.js`](js/config.js). Der Key ist für den Browser gedacht; wer welche Daten sehen darf, regeln die Zugriffsregeln in `schema.sql`.
 
@@ -22,6 +23,8 @@ Kein Build-Schritt nötig, alles sind statische Dateien.
 npm start   # lokaler Server auf http://localhost:8080
 npm test    # Tests für Zutaten-Parser, Portionsrechner, Rezept-Import, Zutatensuche, Einkaufslisten und Saisonkalender
 ```
+
+Schritte sind entweder Text oder `{ text, t }` mit `t` = Sekunden im Video. Steht unter den Quellen ein Video-Link von YouTube oder TikTok, bettet die Rezeptansicht das Video ein, und ein Tipp auf den Zeitstempel eines Schritts springt im Video an diese Stelle.
 
 Zutaten werden als eine Zeile pro Zutat eingegeben („200 g Mehl“, „½ Bund Petersilie“, „2-3 Zehen Knoblauch“) und als `{ amount, amountMax, unit, name }` gespeichert. So kann die App sie auf eine andere Personenzahl umrechnen.
 
