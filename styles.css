@@ -108,6 +108,23 @@ label small, .hint { font-weight: 400; color: var(--muted); font-size: 0.875rem;
 .chip.active { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 span.chip { cursor: default; background: var(--surface-2); }
 
+.alts { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: -4px 0 12px; }
+.alts .alt-nav {
+  flex: none; width: 32px; height: 32px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); font: inherit; font-size: 1.1rem; line-height: 1; cursor: pointer;
+}
+.alts .alt-nav[disabled] { opacity: 0.35; cursor: default; }
+.alt-dots { display: flex; gap: 6px; }
+.alt-dots .dot { width: 8px; height: 8px; border-radius: 999px; background: var(--border); }
+.alt-dots .dot.on { background: var(--accent); }
+.alts small { color: var(--muted); }
+
+.alt-hits { max-height: 50vh; overflow-y: auto; }
+.alt-hit { display: grid; gap: 2px; justify-items: start; }
+.alt-hit .btn { text-align: left; }
+#alt-suggest { margin-top: 10px; }
+#alt-suggest .chips { margin-bottom: 0; }
+
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: 16px; }
 .card {
   display: flex; flex-direction: column;

@@ -12,6 +12,9 @@ import { DEFAULT_PLACES, guessPlaces } from './places.js';
 import {
   videoOf, embedUrl, seekTo, stepText, stepTime, makeStep, formatTime,
 } from './video.js';
+import {
+  pairOf, alternativeIds, alternativeGroup, suggestAlternatives,
+} from './alternatives.js';
 
 const app = document.getElementById('app');
 const nav = document.getElementById('nav');
@@ -26,6 +29,8 @@ let places = null; // eigene Einkaufsorte [{ id, name }]; null = noch nicht gela
 let placesTable = true; // false, solange orte.sql nicht ausgeführt wurde
 let placesSaved = true; // false, solange ingredient_categories keine Spalte places hat
 let myName; // Benutzername: undefined = noch nicht geladen, null = fehlt noch, false = benutzername.sql nicht eingerichtet
+let links = null; // Alternativ-Verknüpfungen [{ recipe_a, recipe_b }]; null = noch nicht geladen
+let linksTable = true; // false, solange alternativen.sql nicht ausgeführt wurde
 let activeTag = null;
 let listSort = 'name';
 let recoveringPassword = false;
@@ -82,6 +87,21 @@ async function loadRecipes(force = false) {
 }
 
 // ---------- Zutaten-Kategorien und Einkaufsorte ----------
+
+// Alle Alternativ-Verknüpfungen, die ich sehen darf (eigene und die freigegebener Kochbücher).
+async function loadAlternatives(force = false) {
+  if (links && !force) return links;
+  const { data, error } = await supabase.from('recipe_alternatives').select('recipe_a, recipe_b');
+  if (error) {
+    // Die Tabelle gibt es erst nach alternativen.sql.
+    linksTable = false;
+    links = [];
+    return links;
+  }
+  linksTable = true;
+  links = data;
+  return links;
+}
 
 async function loadCategories() {
   if (categories) return categories;
@@ -224,7 +244,7 @@ function route() {
 async function render() {
   if (!isConfigured) return renderSetup();
   if (recoveringPassword) return renderNewPassword();
-  const [first, id, action] = route();
+  const [first, id, action, extra] = route();
   renderTabbar(first);
   leaveShoppingList();
   // Geteilte Einzelrezepte kann man auch ohne Konto ansehen.
@@ -248,12 +268,13 @@ async function render() {
     else if (first === 'einkauf') await renderShopping(id);
     else if (first === 'liste' && id) await acceptListInvite(id);
     else if (first === 'einladung' && id) await acceptInvite(id);
-    else if (first === 'kochbuch' && id && action) await renderCookbookRecipe(id, action);
+    else if (first === 'kochbuch' && id && action) await renderCookbookRecipe(id, action, extra);
     else if (first === 'kochbuch' && id) await renderCookbook(id);
     else if (first === 'kochen') await renderPantry();
     else if (first === 'saison') await renderSeason();
     else if (first === 'neu') await renderEditor(null);
     else if (first === 'r' && id && action === 'bearbeiten') await renderEditor(id);
+    else if (first === 'r' && id && action === 'alt' && extra) await renderDetail(id, extra);
     else if (first === 'r' && id) await renderDetail(id);
     else location.hash = '#/';
   });
@@ -808,6 +829,30 @@ function enableSwipe(el, front) {
   }, true);
 }
 
+// Wischen über ein ganzes Rezept: nach links zum nächsten, nach rechts zum vorherigen.
+// Auf Galerie und Video fängt die Geste nicht, die scrollen bzw. steuern selbst.
+function enableRecipeSwipe(el, go) {
+  if (!el) return;
+  let x0 = 0, y0 = 0, active = false, decided = false;
+  el.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || e.target.closest('.gallery, .video, button, a, input, select, textarea')) return;
+    x0 = e.clientX; y0 = e.clientY; active = true; decided = false;
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (!active || decided) return;
+    const mx = e.clientX - x0;
+    const my = e.clientY - y0;
+    if (Math.abs(mx) < 60 && Math.abs(my) < 60) return;
+    decided = true;
+    active = false;
+    if (Math.abs(my) > Math.abs(mx)) return; // senkrecht: normal scrollen
+    go(mx < 0 ? 1 : -1);
+  });
+  const stop = () => { active = false; };
+  el.addEventListener('pointerup', stop);
+  el.addEventListener('pointercancel', stop);
+}
+
 function recipeCard(r, href = `#/r/${r.id}`) {
   const img = r.images[0]
     ? `<img src="${esc(imageUrl(r.images[0]))}" alt="" loading="lazy">`
@@ -820,18 +865,31 @@ function recipeCard(r, href = `#/r/${r.id}`) {
   </a>`;
 }
 
-async function renderDetail(id) {
-  const r = (await loadRecipes()).find((x) => x.id === id);
-  if (!r) {
+// Zeigt ein eigenes Rezept. altId: die gerade angezeigte Alternative des Rezepts id.
+async function renderDetail(id, altId = null) {
+  const [own] = await Promise.all([loadRecipes(), loadAlternatives()]);
+  const main = own.find((x) => x.id === id);
+  if (!main) {
     app.innerHTML = '<div class="notice"><p>Dieses Rezept gibt es nicht (mehr).</p><a class="btn" href="#/">Zur Übersicht</a></div>';
     return;
   }
-  showRecipe(r, { own: true, back: '#/', backLabel: 'Alle Rezepte' });
+  // Gewischt wird zwischen dem aufgerufenen Rezept und seinen Alternativen.
+  const group = alternativeGroup(main, links, own, collator.compare);
+  const index = altId ? group.findIndex((x) => x.id === altId) : 0;
+  if (index < 0) { location.hash = `#/r/${id}`; return; }
+  showRecipe(group[index], {
+    own: true,
+    back: '#/',
+    backLabel: 'Alle Rezepte',
+    group,
+    index,
+    hrefOf: (i) => (i === 0 ? `#/r/${id}` : `#/r/${id}/alt/${group[i].id}`),
+  });
 }
 
 // Zeigt ein Rezept an. Eigene Rezepte kann man bearbeiten, teilen und löschen,
 // fremde (aus einem Teilen-Link oder einem freigegebenen Kochbuch) ins eigene Kochbuch übernehmen.
-function showRecipe(r, { own, back, backLabel, from = '' }) {
+function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0, hrefOf = null }) {
   window.scrollTo(0, 0);
   let servings = r.servings;
   const sources = r.sources.map((u) => [u, safeUrl(u)]).filter(([, href]) => href);
@@ -845,6 +903,12 @@ function showRecipe(r, { own, back, backLabel, from = '' }) {
       ${video ? `<div class="video${video.vertical ? ' vertical' : ''}"><iframe id="video" src="${esc(embedUrl(video, location.origin))}" title="Video zum Rezept"
         allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>` : ''}
       <h1>${esc(r.title)}</h1>
+      ${group.length > 1 ? `<nav class="alts" aria-label="Alternativrezepte">
+        <button type="button" class="alt-nav" data-step="-1" aria-label="Vorheriges Rezept"${index === 0 ? ' disabled' : ''}>‹</button>
+        <span class="alt-dots">${group.map((x, i) => `<span class="dot${i === index ? ' on' : ''}" title="${esc(x.title)}"></span>`).join('')}</span>
+        <button type="button" class="alt-nav" data-step="1" aria-label="Nächstes Rezept"${index === group.length - 1 ? ' disabled' : ''}>›</button>
+        <small>${index === 0 ? 'Hauptrezept' : `Alternative ${index} von ${group.length - 1}`} · wischen zum Wechseln</small>
+      </nav>` : ''}
       ${own ? `<div class="stars" role="group" aria-label="Bewertung">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-star="${n}" class="${(r.rating ?? 0) >= n ? 'on' : ''}" aria-label="${n} von 5 Sternen" aria-pressed="${r.rating === n}">★</button>`).join('')}</div>`
     : r.rating ? `<div class="stars readonly" aria-label="${r.rating} von 5 Sternen">${'★'.repeat(r.rating)}${'☆'.repeat(5 - r.rating)}</div>` : ''}
       ${own ? '<div id="planned"></div>' : ''}
@@ -892,6 +956,17 @@ function showRecipe(r, { own, back, backLabel, from = '' }) {
     : '<button class="btn primary" id="login-copy">Anmelden, um das Rezept zu übernehmen</button>'}
       </div>
     </article>`;
+
+  // Links/rechts wischen wechselt zwischen Hauptrezept und Alternativen.
+  if (group.length > 1 && hrefOf) {
+    const go = (step) => {
+      const next = index + step;
+      if (next < 0 || next >= group.length) return;
+      location.hash = hrefOf(next);
+    };
+    app.querySelectorAll('.alt-nav').forEach((b) => { b.onclick = () => go(Number(b.dataset.step)); });
+    enableRecipeSwipe($('.recipe'), go);
+  }
 
   const ingList = $('#ing');
   const drawIngredients = () => {
@@ -995,12 +1070,72 @@ async function deleteRecipe(r) {
   if (error) { toast(error.message); return false; }
   if (r.images.length) await supabase.storage.from(IMAGE_BUCKET).remove(r.images);
   recipes = recipes.filter((x) => x.id !== r.id);
+  if (links) links = links.filter((l) => l.recipe_a !== r.id && l.recipe_b !== r.id); // per Cascade auch in der Datenbank weg
   toast('Rezept gelöscht');
   return true;
 }
 
+// Schreibt die Verknüpfungen eines Rezepts: neue anlegen, gelöste entfernen.
+async function saveAlternatives(recipeId, wanted) {
+  const before = alternativeIds(links ?? [], recipeId);
+  const added = wanted.filter((x) => !before.includes(x));
+  const removed = before.filter((x) => !wanted.includes(x));
+  if (added.length) {
+    const { error } = await supabase.from('recipe_alternatives')
+      .upsert(added.map((x) => pairOf(recipeId, x)), { onConflict: 'recipe_a,recipe_b' });
+    if (error) throw error;
+  }
+  for (const x of removed) {
+    const { recipe_a: a, recipe_b: b } = pairOf(recipeId, x);
+    const { error } = await supabase.from('recipe_alternatives').delete().eq('recipe_a', a).eq('recipe_b', b);
+    if (error) throw error;
+  }
+  if (added.length || removed.length) await loadAlternatives(true);
+}
+
+// Rezept-Auswahl mit Suchfeld. Liefert { id, withGroup } oder null. withGroup = true,
+// wenn auch alle Alternativen des gewählten Rezepts übernommen werden sollen.
+function chooseRecipeSheet(candidates, altCount) {
+  return new Promise((resolve) => {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'sheet';
+    dialog.innerHTML = `<form method="dialog" class="sheet-form">
+      <h2>Rezept als Alternative</h2>
+      <input id="alt-q" type="search" placeholder="Titel oder Tag" autocomplete="off" enterkeyhint="search">
+      <div class="choices alt-hits" id="alt-hits"></div>
+      <div class="row"><button class="btn ghost" value="cancel" formnovalidate>Abbrechen</button></div>
+    </form>`;
+    document.body.append(dialog);
+    const input = dialog.querySelector('#alt-q');
+    const hits = dialog.querySelector('#alt-hits');
+    const draw = () => {
+      const q = input.value.trim().toLowerCase();
+      const found = candidates
+        .filter((r) => !q || r.title.toLowerCase().includes(q) || r.tags.some((t) => t.toLowerCase().includes(q)))
+        .slice(0, 20);
+      hits.innerHTML = found.length ? found.map((r) => {
+        const n = altCount.get(r.id) ?? 0;
+        return `<div class="alt-hit"><button type="button" class="btn ghost" data-pick="${esc(r.id)}">${esc(r.title)}</button>
+          ${n ? `<button type="button" class="link" data-group="${esc(r.id)}">+ alle ${n} ${n === 1 ? 'Alternative' : 'Alternativen'} von „${esc(r.title)}“ übernehmen</button>` : ''}</div>`;
+      }).join('') : '<p class="hint">Kein Rezept gefunden.</p>';
+      hits.querySelectorAll('[data-pick]').forEach((b) => {
+        b.onclick = () => { done({ id: b.dataset.pick, withGroup: false }); };
+      });
+      hits.querySelectorAll('[data-group]').forEach((b) => {
+        b.onclick = () => { done({ id: b.dataset.group, withGroup: true }); };
+      });
+    };
+    let result = null;
+    const done = (r) => { result = r; dialog.close(); };
+    input.oninput = draw;
+    draw();
+    dialog.addEventListener('close', () => { dialog.remove(); resolve(result); });
+    dialog.showModal();
+  });
+}
+
 async function renderEditor(id) {
-  const [own] = await Promise.all([loadRecipes(), loadCategories()]);
+  const [own] = await Promise.all([loadRecipes(), loadCategories(), loadAlternatives()]);
   const existing = id ? own.find((x) => x.id === id) : null;
   if (id && !existing) { location.hash = '#/'; return; }
   window.scrollTo(0, 0);
@@ -1013,6 +1148,7 @@ async function renderEditor(id) {
   const toEdit = (s) => ({ text: stepText(s), t: stepTime(s) });
   let steps = r.steps.length ? r.steps.map(toEdit) : [toEdit('')];
   const knownTags = [...new Set((recipes || []).flatMap((x) => x.tags))].sort(collator.compare);
+  let altIds = existing ? alternativeIds(links, existing.id) : [];
   let newFiles = [];
 
   app.innerHTML = `
@@ -1079,6 +1215,15 @@ async function renderEditor(id) {
       </fieldset>
       <label>Notizen <textarea name="notes" rows="3">${esc(r.notes)}</textarea></label>
       <label>Quellen <textarea name="sources" rows="2" placeholder="https://… (ein Link pro Zeile)">${esc(r.sources.join('\n'))}</textarea></label>
+
+      <fieldset id="alt-box">
+        <legend>Alternativen</legend>
+        ${linksTable ? `<div class="chips static" id="alt-chips"></div>
+        <button type="button" class="btn small" id="alt-add">+ Alternative</button>
+        <div id="alt-suggest"></div>
+        <small>Verknüpfte Rezepte gelten in beide Richtungen. In der Rezeptansicht wechselst du mit Wischen zwischen ihnen.</small>`
+    : '<p class="hint">Dafür fehlt noch der Schritt in der Datenbank: <code>supabase/alternativen.sql</code> im SQL-Editor ausführen (siehe README).</p>'}
+      </fieldset>
 
       <fieldset>
         <legend>Bilder</legend>
@@ -1193,6 +1338,44 @@ async function renderEditor(id) {
   };
   drawSteps();
 
+  // Alternativen verwalten: Chips mit × zum Lösen, Suche und Vorschläge anhand gemeinsamer Tags.
+  const altChips = $('#alt-chips');
+  const drawAlts = () => {
+    if (!altChips) return;
+    const byId = new Map(own.map((x) => [x.id, x]));
+    altChips.innerHTML = altIds.length
+      ? altIds.map((x) => `<span class="chip">${esc(byId.get(x)?.title ?? 'Rezept')}
+          <button type="button" data-unlink="${esc(x)}" aria-label="Verknüpfung lösen">×</button></span>`).join('')
+      : '<span class="hint">Noch keine Alternative verknüpft.</span>';
+    altChips.querySelectorAll('[data-unlink]').forEach((b) => {
+      b.onclick = () => { altIds = altIds.filter((x) => x !== b.dataset.unlink); drawAlts(); };
+    });
+    const box = $('#alt-suggest');
+    // Vorschläge: Rezepte mit gemeinsamen Tags, die noch nicht verknüpft sind.
+    const base = { id: existing?.id ?? '', tags };
+    const hidden = new Set(altIds);
+    const suggestions = suggestAlternatives(base, own.filter((x) => !hidden.has(x.id)), [], { compare: collator.compare });
+    box.innerHTML = suggestions.length ? `<p class="hint">Vorschläge nach gemeinsamen Tags:</p>
+      <div class="chips static">${suggestions.map((x) => `<button type="button" class="chip add" data-link="${esc(x.id)}">+ ${esc(x.title)}</button>`).join('')}</div>` : '';
+    box.querySelectorAll('[data-link]').forEach((b) => {
+      b.onclick = () => { altIds = [...altIds, b.dataset.link]; drawAlts(); };
+    });
+  };
+  drawAlts();
+  const altAdd = $('#alt-add');
+  if (altAdd) {
+    altAdd.onclick = async () => {
+      const hidden = new Set([existing?.id, ...altIds]);
+      const candidates = own.filter((x) => !hidden.has(x.id));
+      const altCount = new Map(candidates.map((x) => [x.id, alternativeIds(links, x.id).filter((o) => !hidden.has(o) && o !== existing?.id).length]));
+      const picked = await chooseRecipeSheet(candidates, altCount);
+      if (!picked) return;
+      const add = [picked.id, ...(picked.withGroup ? alternativeIds(links, picked.id) : [])];
+      altIds = [...new Set([...altIds, ...add])].filter((x) => x !== existing?.id);
+      drawAlts();
+    };
+  }
+
   const setNutrition = (n) => {
     form.nutrition_per.value = n.per === '100 g' ? '100 g' : 'Portion';
     NUTRIENTS.forEach(([k]) => { form[`n_${k}`].value = n[k] ?? ''; });
@@ -1243,6 +1426,7 @@ async function renderEditor(id) {
       const { data, error } = await supabase.from('recipes').upsert(row).select().single();
       if (error) throw error;
       await rememberCategories(row.ingredients.map((i) => i.name));
+      if (linksTable) await saveAlternatives(data.id, altIds);
 
       const removed = existing ? existing.images.filter((p) => !keptImages.includes(p)) : [];
       if (removed.length) await supabase.storage.from(IMAGE_BUCKET).remove(removed);
@@ -2167,14 +2351,25 @@ async function renderCookbook(ownerId) {
   draw();
 }
 
-async function renderCookbookRecipe(ownerId, recipeId) {
-  const book = await loadCookbook(ownerId);
+async function renderCookbookRecipe(ownerId, recipeId, altId = null) {
+  const [book] = await Promise.all([loadCookbook(ownerId), loadAlternatives()]);
   const r = book?.recipes.find((x) => x.id === recipeId);
   if (!r) {
     app.innerHTML = '<div class="notice"><p>Dieses Rezept gibt es nicht (mehr).</p><a class="btn" href="#/geteilt">Zurück</a></div>';
     return;
   }
-  showRecipe(r, { own: false, back: `#/kochbuch/${ownerId}`, backLabel: `Kochbuch von ${book.email}` });
+  // Auch in einem freigegebenen Kochbuch kann man zu den Alternativen wischen.
+  const group = alternativeGroup(r, links, book.recipes, collator.compare);
+  const index = altId ? group.findIndex((x) => x.id === altId) : 0;
+  if (index < 0) { location.hash = `#/kochbuch/${ownerId}/${recipeId}`; return; }
+  showRecipe(group[index], {
+    own: false,
+    back: `#/kochbuch/${ownerId}`,
+    backLabel: `Kochbuch von ${book.email}`,
+    group,
+    index,
+    hrefOf: (i) => (i === 0 ? `#/kochbuch/${ownerId}/${recipeId}` : `#/kochbuch/${ownerId}/${recipeId}/${group[i].id}`),
+  });
 }
 
 function importMessage(data) {
