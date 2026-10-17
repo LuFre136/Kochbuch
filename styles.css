@@ -410,10 +410,11 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 0.35); }
 .swipe-btn.danger { background: var(--danger); color: #fff; }
 .list-settings[hidden] { display: none; }
 
-.import-photo { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
-.import-photo small { color: var(--muted); }
-.import-photo .btn { flex: none; }
-.import-photo .btn.disabled { opacity: 0.5; pointer-events: none; }
+.import-more { margin-top: 12px; display: grid; gap: 8px; }
+.import-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.import-more small { color: var(--muted); }
+.import-more .btn { flex: none; }
+.import-more .btn.disabled { opacity: 0.5; pointer-events: none; }
 .nutrition-edit { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; }
 .nutrition-edit summary { font-weight: 600; cursor: pointer; }
 .nutrition-edit[open] summary { margin-bottom: 10px; }

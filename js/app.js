@@ -1028,9 +1028,15 @@ async function renderEditor(id) {
           </div>
           <small>Liest Titel, Zutaten, Zubereitung, Zeiten, Nährwerte und Bild aus, auch aus Videos von YouTube und TikTok. Danach kannst du alles anpassen.</small>
         </label>
-        <div class="import-photo">
-          <label class="btn" id="import-photo-btn">📷 Aus Fotos<input type="file" id="import-photos" accept="image/*" multiple hidden></label>
-          <small>Kochbuchseite oder Rezeptkarte fotografieren, gedruckt oder handschriftlich (bis zu 6 Fotos).</small>
+        <div class="import-more">
+          <div class="import-buttons">
+            <label class="btn" id="import-photo-btn">📷 Aus Fotos<input type="file" id="import-photos" accept="image/*" multiple hidden></label>
+            <label class="btn" id="import-video-btn">🎬 Aus Video<input type="file" id="import-video" accept="video/*" hidden></label>
+            <button type="button" class="btn" id="import-text-btn">📝 Text einfügen</button>
+          </div>
+          <small><b>Fotos:</b> Kochbuchseite oder Rezeptkarte, gedruckt oder handschriftlich (bis zu 6).
+            <b>Video:</b> ein gespeichertes TikTok oder Reel, wenn das Rezept nur im Video gesprochen oder eingeblendet wird (bis 50 MB).
+            <b>Text:</b> z. B. ein Kommentar mit dem Rezept.</small>
         </div>
         <p class="hint" id="import-msg" role="status"></p>
       </div>`}
@@ -2177,6 +2183,16 @@ function importMessage(data) {
       ? 'Vom Foto übernommen. Die KI kann sich verlesen, besonders bei Handschrift: Prüfe alles, dann tippe auf Speichern.'
       : 'Auf den Fotos wurde kein Rezept erkannt. Versuche es mit einem schärferen, hellen Foto.';
   }
+  if (data.uploaded) {
+    return data.ingredients?.length || data.steps?.length
+      ? 'Aus dem Video übernommen. Die KI kann sich irren: Prüfe Mengen, Schritte und Zeitstempel, dann tippe auf Speichern.'
+      : 'Im Video wurde kein Rezept erkannt.';
+  }
+  if (data.pasted) {
+    return data.ingredients?.length || data.steps?.length
+      ? 'Aus dem Text übernommen. Prüfe die Angaben und tippe auf Speichern.'
+      : 'Im Text wurde kein Rezept erkannt.';
+  }
   if (data.ingredients?.length) {
     return data.video
       ? 'Aus dem Video übernommen. Die KI kann sich irren: Prüfe Mengen, Schritte und Zeitstempel, dann tippe auf Speichern.'
@@ -2185,6 +2201,7 @@ function importMessage(data) {
   if (!data.video) return 'Auf dieser Seite wurden keine Rezeptdaten gefunden. Titel und Bild sind übernommen, den Rest bitte selbst ergänzen.';
   if (data.ai === 'none') return 'Video übernommen. Für Zutaten und Schritte fehlt in Supabase noch das Secret GEMINI_API_KEY (siehe README).';
   if (data.ai === 'failed') return `Video übernommen, aber die Auswertung hat nicht geklappt${data.ai_error ? ` (${data.ai_error})` : ''}. Die Videobeschreibung steht in den Notizen.`;
+  if (data.video.provider === 'tiktok') return 'Im Text zum TikTok steht kein Rezept. Tippe in TikTok auf „Teilen“ → „Video speichern“ und lade das Video hier mit „🎬 Aus Video“ hoch. Titel, Bild und Link sind schon übernommen.';
   return 'Im Video wurde kein Rezept gefunden. Titel, Bild und Link sind übernommen, den Rest bitte selbst ergänzen.';
 }
 
@@ -2195,12 +2212,17 @@ function setupImport(form, { setTags, setSteps, addImage, drawPreview, setNutrit
   const btn = $('#import-btn');
   const photoInput = $('#import-photos');
   const photoBtn = $('#import-photo-btn');
+  const videoInput = $('#import-video');
+  const videoBtn = $('#import-video-btn');
+  const textBtn = $('#import-text-btn');
   const msg = $('#import-msg');
 
   const busy = (on) => {
     btn.disabled = on;
-    photoBtn.classList.toggle('disabled', on);
+    textBtn.disabled = on;
+    for (const b of [photoBtn, videoBtn]) b.classList.toggle('disabled', on);
     photoInput.disabled = on;
+    videoInput.disabled = on;
     btn.textContent = on ? 'Lade …' : 'Importieren';
   };
 
@@ -2272,7 +2294,57 @@ function setupImport(form, { setTags, setSteps, addImage, drawPreview, setNutrit
       busy(false);
     }
   };
+
+  // Gespeichertes Video (z. B. ein TikTok): kurz in den eigenen Speicherordner, die Edge Function
+  // gibt es an Gemini weiter und löscht es danach. Ein Video-Link im Feld oder in den Quellen
+  // wird mitgeschickt, damit Titel, Bild und das Springen zu den Zeitstempeln funktionieren.
+  videoInput.onchange = async () => {
+    const file = videoInput.files[0];
+    videoInput.value = '';
+    if (!file) return;
+    if (file.size > MAX_VIDEO_BYTES) { msg.textContent = 'Das Video ist größer als 50 MB. Kürze es oder nimm eine kleinere Qualität.'; return; }
+    const ext = VIDEO_EXT[file.type] ?? file.name.match(/\.(mp4|mov|webm|m4v|3gp)$/i)?.[1].toLowerCase() ?? 'mp4';
+    const path = `${session.user.id}/${crypto.randomUUID()}.${ext}`;
+    const links = [input.value.trim(), ...form.sources.value.split('\n').map((x) => x.trim())];
+    const source = links.find((l) => safeUrl(l) && (videoOf([l]) || /tiktok\.com/i.test(l))) ?? '';
+    busy(true);
+    msg.textContent = 'Das Video wird hochgeladen …';
+    const bucket = supabase.storage.from('import-videos');
+    try {
+      const { error } = await bucket.upload(path, file, { contentType: file.type || 'video/mp4' });
+      if (error) throw new Error(/bucket/i.test(error.message) ? 'Der Speicherordner für Videos fehlt noch (videos.sql ausführen, siehe README).' : error.message);
+      msg.textContent = 'Das Video wird ausgewertet. Das kann bis zu zwei Minuten dauern …';
+      await fill(await invoke({ video: { path, source } }));
+    } catch (err) {
+      msg.textContent = `Import fehlgeschlagen: ${err.message}`;
+    } finally {
+      bucket.remove([path]).catch(() => {}); // falls die Edge Function es nicht mehr löschen konnte
+      busy(false);
+    }
+  };
+
+  // Eingefügter Text, z. B. ein Kommentar mit dem Rezept.
+  textBtn.onclick = async () => {
+    const { value, form: sheet } = await openSheet(`<h2>Text einfügen</h2>
+      <label>Text mit dem Rezept <textarea name="text" rows="10" placeholder="z. B. ein Kommentar, eine Nachricht oder Notizen"></textarea></label>
+      <div class="row"><button class="btn primary" value="ok">Auswerten</button>
+        <button class="btn ghost" value="cancel" formnovalidate>Abbrechen</button></div>`);
+    const text = sheet.text.value.trim();
+    if (value !== 'ok' || !text) return;
+    busy(true);
+    msg.textContent = 'Der Text wird ausgewertet …';
+    try {
+      await fill(await invoke({ text }));
+    } catch (err) {
+      msg.textContent = `Import fehlgeschlagen: ${err.message}`;
+    } finally {
+      busy(false);
+    }
+  };
 }
+
+const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
+const VIDEO_EXT = { 'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm', 'video/x-m4v': 'm4v', 'video/3gpp': '3gp' };
 
 function blobToDataUrl(blob) {
   return new Promise((resolve, reject) => {
