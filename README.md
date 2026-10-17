@@ -39,11 +39,11 @@ In der Rezeptansicht ist das aufgerufene Rezept das Hauptrezept; mit Wischen nac
 
 ## Rezepte kombinieren
 
-Im Rezept auf „Kombinieren“ tippen (oder `#/kombinieren` öffnen). Das aufgerufene Rezept ist das Hauptrezept: seine Zutaten, Bilder, Zeiten und Personenzahl stehen schon im neuen Rezept. Über „+ Rezept“ kommen weitere dazu, auch aus freigegebenen Kochbüchern.
+Im Rezept auf „Bearbeiten“ und dort unten auf „Mit anderem Rezept kombinieren“ tippen (oder `#/kombinieren` öffnen). Das aufgerufene Rezept ist das Hauptrezept: seine Zutaten, Zeiten und Personenzahl stehen schon im neuen Rezept. Über „+ Rezept“ kommen weitere dazu, auch aus freigegebenen Kochbüchern.
 
 Die Schritte der Ausgangsrezepte werden in der Reihenfolge angetippt, in der gekocht wird; ein weiterer Tipp nimmt einen Schritt wieder heraus, und mit ↑ ↓ lässt sich die Reihenfolge ändern. Nennt ein gewählter Schritt eine Zutat seines Rezepts, die noch fehlt, kommt sie automatisch dazu — umgerechnet auf die Personenzahl des Hauptrezepts. Steht die Zutat schon drin, bleibt die Menge des Hauptrezepts stehen und die andere Menge erscheint als Hinweis. Weil nicht jeder Schritt seine Zutaten nennt („Alles verrühren“), gibt es je Rezept die Liste „Weitere Zutaten aus …“ zum Nachtragen.
 
-„Weiter“ öffnet das Bearbeiten-Formular mit Titel „A + B“, den Tags aller Rezepte und allen Quellen; die Zeitstempel behalten ihr Video. Nach dem Speichern wird das neue Rezept mit allen Ausgangsrezepten als Alternative verknüpft, und die App fragt, ob die Ausgangsrezepte gelöscht werden sollen.
+„Weiter“ öffnet das Bearbeiten-Formular mit Titel „A + B“, den Tags aller Rezepte, allen Quellen und den Bildern aller beteiligten eigenen Rezepte (einzeln wieder abwählbar). Jeder Zeitstempel behält das Video seines Ausgangsrezepts, auch wenn am Schritt selbst nichts stand; stimmt die Zuordnung nicht, stellt „Alle Zeitstempel zuordnen“ unter den Schritten sie auf ein Video um. Nach dem Speichern wird das neue Rezept mit allen Ausgangsrezepten als Alternative verknüpft, und die App fragt, ob die Ausgangsrezepte gelöscht werden sollen.
 
 ## Teilen
 

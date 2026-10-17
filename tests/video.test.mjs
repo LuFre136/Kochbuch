@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseVideoUrl, videoOf, videosOf, videoKey, embedUrl, stepText, stepTime, stepVideo,
-  dropMissingTimes, makeStep, formatTime,
+  stepVideoKey, dropMissingTimes, makeStep, formatTime,
 } from '../js/video.js';
 import * as fn from '../supabase/functions/import-recipe/index.ts';
 
@@ -147,4 +147,12 @@ test('ohne sein Video verliert ein Schritt den Zeitstempel', () => {
   ], videos);
   assert.equal(dropped, 1);
   assert.deepEqual(steps, [{ text: 'Bleibt', t: 10, v: 'youtube:dQw4w9WgXcQ' }, 'Verliert', 'Ohne Zeit']);
+});
+
+test('stepVideoKey nimmt ohne Angabe das erste Video des Rezepts', () => {
+  const sources = ['https://www.youtube.com/watch?v=dQw4w9WgXcQ', 'https://www.tiktok.com/@a/video/1234567890123'];
+  assert.equal(stepVideoKey({ text: 'x', t: 5 }, sources), 'youtube:dQw4w9WgXcQ');
+  assert.equal(stepVideoKey({ text: 'x', t: 5, v: 'tiktok:1234567890123' }, sources), 'tiktok:1234567890123');
+  assert.equal(stepVideoKey('nur Text', sources), null);
+  assert.equal(stepVideoKey({ text: 'x', t: 5 }, []), null);
 });

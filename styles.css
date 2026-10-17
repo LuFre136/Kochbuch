@@ -148,6 +148,8 @@ ul.hint { margin: 8px 0 0; padding-left: 1.2rem; }
 .alt-hits { max-height: 50vh; overflow-y: auto; }
 .alt-hit { display: grid; gap: 2px; justify-items: start; }
 .alt-hit .btn { text-align: left; }
+.step-videos { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+.step-videos:empty { display: none; }
 #alt-suggest { margin-top: 10px; }
 #alt-suggest .chips { margin-bottom: 0; }
 
