@@ -499,7 +499,7 @@ function setIncludeShared(on) {
 
 // Eigene Rezepte, plus die aus geteilten Kochbüchern, wenn gewünscht. sharedBooks: Anzahl geteilter Kochbücher.
 async function searchableRecipes() {
-  const [own, people] = await Promise.all([loadRecipes(), loadPeople().catch(() => ({ owners: [] }))]);
+  const [own, people] = await Promise.all([loadRecipes(), loadPeople().catch(() => ({ owners: [] })), loadAlternatives()]);
   if (!people.owners.length || !includeShared()) return { all: own, sharedBooks: people.owners.length };
   const books = await Promise.all(people.owners.map((o) => loadCookbook(o.owner_id)));
   const shared = books.filter(Boolean).flatMap((b) => b.recipes.map((r) => ({ ...r, from: b.email })));
@@ -544,6 +544,7 @@ async function renderPantry() {
     <div id="pantry-tags"></div>
     <div id="suggestions"></div>`;
 
+  const byId = new Map(all.map((r) => [r.id, r]));
   const input = $('#have');
   const draw = () => {
     savePantry(state);
@@ -574,9 +575,9 @@ async function renderPantry() {
     const missingText = (m) => (m.length <= 3
       ? `Es fehlt: ${m.map(esc).join(', ')}`
       : `Es fehlen ${m.length} Zutaten: ${m.slice(0, 3).map(esc).join(', ')} …`);
-    const card = (h) => `<a class="suggestion" href="${recipeHref(h.recipe)}">
+    const card = (h) => `<a class="suggestion${altStack(h.recipe)}" href="${recipeHref(h.recipe)}">
       ${h.recipe.images[0] ? `<img src="${esc(imageUrl(h.recipe.images[0]))}" alt="" loading="lazy">` : '<div class="placeholder" aria-hidden="true">🍲</div>'}
-      <div><h3>${esc(h.recipe.title)}</h3>${fromLine(h.recipe)}
+      <div><h3>${esc(h.recipe.title)}${altMark(h.recipe, byId)}</h3>${fromLine(h.recipe)}
       <p class="${h.missing.length ? 'missing' : 'ok'}">${h.missing.length ? missingText(h.missing) : `Alle ${h.total} Zutaten da`}</p></div>
     </a>`;
     const section = (title, list) => (list.length ? `<h2>${title}</h2><div class="suggestions">${list.map(card).join('')}</div>` : '');
@@ -634,6 +635,7 @@ async function renderSeason() {
   app.innerHTML = '<p class="loading">Lade Rezepte …</p>';
   const { all, sharedBooks } = await searchableRecipes();
   const st = seasonState;
+  const byId = new Map(all.map((r) => [r.id, r]));
 
   app.innerHTML = `
     ${pantryTabs('saison')}
@@ -686,9 +688,9 @@ async function renderSeason() {
     const produce = st.focus.size ? current.filter((p) => st.focus.has(p.name)) : current;
     const found = seasonalRecipes(all, produce);
     const hits = tagFilter($('#season-tags'), found.map((h) => h.recipe), st.tags, draw)(found);
-    $('#season-results').innerHTML = hits.length ? `<div class="suggestions">${hits.map((h) => `<a class="suggestion" href="${recipeHref(h.recipe)}">
+    $('#season-results').innerHTML = hits.length ? `<div class="suggestions">${hits.map((h) => `<a class="suggestion${altStack(h.recipe)}" href="${recipeHref(h.recipe)}">
       ${h.recipe.images[0] ? `<img src="${esc(imageUrl(h.recipe.images[0]))}" alt="" loading="lazy">` : '<div class="placeholder" aria-hidden="true">🍲</div>'}
-      <div><h3>${esc(h.recipe.title)}</h3>${fromLine(h.recipe)}<p class="ok">Saison: ${h.matches.map((p) => esc(p.name)).join(', ')}</p></div></a>`).join('')}</div>`
+      <div><h3>${esc(h.recipe.title)}${altMark(h.recipe, byId)}</h3>${fromLine(h.recipe)}<p class="ok">Saison: ${h.matches.map((p) => esc(p.name)).join(', ')}</p></div></a>`).join('')}</div>`
       : `<p class="hint">${all.length ? 'Keines deiner Rezepte passt dazu.' : 'Du hast noch keine Rezepte.'}</p>`;
   };
 
@@ -702,7 +704,7 @@ async function renderSeason() {
 
 async function renderList() {
   app.innerHTML = '<p class="loading">Lade Rezepte …</p>';
-  const all = await loadRecipes();
+  const [all] = await Promise.all([loadRecipes(), loadAlternatives()]);
   if (!all.length) {
     app.innerHTML = `<div class="empty">
       <h1>Noch keine Rezepte</h1>
@@ -724,6 +726,7 @@ async function renderList() {
     ${tags.length ? `<div class="chips">${tags.map((t) => `<button class="chip${t === activeTag ? ' active' : ''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}</div>` : ''}
     <div id="results" class="grid"></div>`;
 
+  const byId = new Map(all.map((r) => [r.id, r]));
   const results = $('#results');
   const draw = () => {
     const q = listQuery.trim().toLowerCase();
@@ -733,7 +736,7 @@ async function renderList() {
     results.innerHTML = shown.length ? shown.map((r) => `<div class="swipe" data-id="${r.id}">
         <div class="swipe-actions start"><button type="button" class="swipe-btn danger" data-act="delete">Löschen</button></div>
         <div class="swipe-actions end"><button type="button" class="swipe-btn" data-act="plan">Einplanen</button><button type="button" class="swipe-btn accent" data-act="share">Teilen</button></div>
-        ${recipeCard(r)}</div>`).join('')
+        ${recipeCard(r, `#/r/${r.id}`, byId)}</div>`).join('')
       : '<p class="hint">Keine passenden Rezepte gefunden.</p>';
     results.querySelectorAll('.swipe').forEach((el) => enableSwipe(el, el.querySelector('.card')));
   };
@@ -861,15 +864,43 @@ function enableRecipeSwipe(el, go) {
   el.addEventListener('pointercancel', stop);
 }
 
-function recipeCard(r, href = `#/r/${r.id}`) {
+// Einmaliger Hinweis, dass zwischen den Alternativen gewischt werden kann. Er geht weg,
+// sobald einmal gewechselt wurde.
+const ALT_HINT = 'altHintSeen';
+function showAltHint() {
+  try { if (localStorage.getItem(ALT_HINT)) return; } catch { return; }
+  const nav = $('.alts');
+  if (!nav) return;
+  nav.insertAdjacentHTML('afterend', `<p class="swipe-hint" id="alt-hint">← Wisch über das Rezept oder tippe oben auf einen Titel, um die Alternativen zu sehen. →</p>`);
+  $('#alt-hint').onclick = seenAltHint;
+}
+function seenAltHint() {
+  try { localStorage.setItem(ALT_HINT, '1'); } catch { /* ohne Speicher eben jedes Mal */ }
+  $('#alt-hint')?.remove();
+}
+
+// Kennzeichnung für Rezepte mit Alternativen: „+2“ auf der Karte. byId: Rezepte für die
+// Titel im Tooltip, soweit vorhanden.
+function altMark(r, byId = null) {
+  const ids = links ? alternativeIds(links, r.id) : [];
+  if (!ids.length) return '';
+  const titles = ids.map((x) => byId?.get(x)?.title).filter(Boolean);
+  const label = `${ids.length === 1 ? 'Eine Alternative' : `${ids.length} Alternativen`}${titles.length ? `: ${titles.join(', ')}` : ''}`;
+  return `<span class="alt-badge" title="${esc(label)}" aria-label="${esc(label)}">+${ids.length}</span>`;
+}
+
+// Hat ein Rezept Alternativen, liegt die Karte wie ein kleiner Stapel.
+const altStack = (r) => (links && alternativeIds(links, r.id).length ? ' stacked' : '');
+
+function recipeCard(r, href = `#/r/${r.id}`, byId = null) {
   const img = r.images[0]
     ? `<img src="${esc(imageUrl(r.images[0]))}" alt="" loading="lazy">`
     : '<div class="placeholder" aria-hidden="true">🍲</div>';
   const meta = [r.rating ? '★'.repeat(r.rating) : '', r.total_minutes != null ? `⏱ ${formatMinutes(r.total_minutes)}` : '', ...r.tags.slice(0, 3)]
     .filter(Boolean).map((m) => `<span>${esc(m)}</span>`).join('');
-  return `<a class="card" href="${href}">
+  return `<a class="card${altStack(r)}" href="${href}">
     ${img}
-    <div class="card-body"><h2>${esc(r.title)}</h2><div class="meta">${meta}</div></div>
+    <div class="card-body"><h2>${esc(r.title)}${altMark(r, byId)}</h2><div class="meta">${meta}</div></div>
   </a>`;
 }
 
@@ -914,13 +945,17 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
       ${shown ? `${videos.length > 1 ? `<div class="video-tabs" id="video-tabs" role="tablist">${videos.map((v, i) => `<button type="button" class="chip${i === 0 ? ' active' : ''}" data-video="${esc(v.key)}" role="tab" aria-selected="${i === 0}">Video ${i + 1} · ${videoLabel(v)}</button>`).join('')}</div>` : ''}
       <div class="video${shown.vertical ? ' vertical' : ''}" id="video-box"><iframe id="video" src="${esc(embedUrl(shown, location.origin))}" title="Video zum Rezept"
         allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>` : ''}
-      <h1>${esc(r.title)}</h1>
       ${group.length > 1 ? `<nav class="alts" aria-label="Alternativrezepte">
-        <button type="button" class="alt-nav" data-step="-1" aria-label="Vorheriges Rezept"${index === 0 ? ' disabled' : ''}>‹</button>
-        <span class="alt-dots">${group.map((x, i) => `<span class="dot${i === index ? ' on' : ''}" title="${esc(x.title)}"></span>`).join('')}</span>
-        <button type="button" class="alt-nav" data-step="1" aria-label="Nächstes Rezept"${index === group.length - 1 ? ' disabled' : ''}>›</button>
-        <small>${index === 0 ? 'Hauptrezept' : `Alternative ${index} von ${group.length - 1}`} · wischen zum Wechseln</small>
+        <p class="alt-title">${group.length - 1 === 1 ? 'Dieses Rezept hat eine Alternative' : `Dieses Rezept hat ${group.length - 1} Alternativen`}</p>
+        <div class="alt-row">
+          <button type="button" class="alt-nav" data-step="-1" aria-label="Vorheriges Rezept"${index === 0 ? ' disabled' : ''}>‹</button>
+          <div class="alt-tabs" role="tablist">${group.map((x, i) => `<button type="button" class="chip${i === index ? ' active' : ''}"
+            data-alt="${i}" role="tab" aria-selected="${i === index}">${esc(x.title)}${i === 0 ? ' <small>Haupt</small>' : ''}</button>`).join('')}</div>
+          <button type="button" class="alt-nav" data-step="1" aria-label="Nächstes Rezept"${index === group.length - 1 ? ' disabled' : ''}>›</button>
+        </div>
+        <small>${index === 0 ? 'Hauptrezept' : `Alternative ${index} von ${group.length - 1}`} · antippen oder wischen zum Wechseln</small>
       </nav>` : ''}
+      <h1>${esc(r.title)}</h1>
       ${own ? `<div class="stars" role="group" aria-label="Bewertung">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-star="${n}" class="${(r.rating ?? 0) >= n ? 'on' : ''}" aria-label="${n} von 5 Sternen" aria-pressed="${r.rating === n}">★</button>`).join('')}</div>`
     : r.rating ? `<div class="stars readonly" aria-label="${r.rating} von 5 Sternen">${'★'.repeat(r.rating)}${'☆'.repeat(5 - r.rating)}</div>` : ''}
       ${own ? '<div id="planned"></div>' : ''}
@@ -981,7 +1016,13 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
       location.hash = hrefOf(next);
     };
     app.querySelectorAll('.alt-nav').forEach((b) => { b.onclick = () => go(Number(b.dataset.step)); });
-    enableRecipeSwipe($('.recipe'), go);
+    app.querySelectorAll('.alt-tabs [data-alt]').forEach((b) => {
+      b.onclick = () => { seenAltHint(); location.hash = hrefOf(Number(b.dataset.alt)); };
+    });
+    // Der aktive Reiter soll zu sehen sein, auch wenn die Leiste seitlich scrollt.
+    app.querySelector('.alt-tabs .chip.active')?.scrollIntoView({ block: 'nearest', inline: 'center' });
+    enableRecipeSwipe($('.recipe'), (step) => { seenAltHint(); go(step); });
+    showAltHint();
   }
 
   const ingList = $('#ing');
@@ -1863,7 +1904,7 @@ async function planRecipe(r, servings = r.servings) {
 
 async function renderPlan() {
   app.innerHTML = '<p class="loading">Lade Plan …</p>';
-  const [plan, own, onLists] = await Promise.all([loadPlan(), loadRecipes(), loadPlannedOnLists()]);
+  const [plan, own, onLists] = await Promise.all([loadPlan(), loadRecipes(), loadPlannedOnLists(), loadAlternatives()]);
   const byId = new Map(own.map((r) => [r.id, r]));
   const entries = plan.filter((p) => byId.has(p.recipe_id));
   if (!entries.length) {
@@ -1881,9 +1922,9 @@ async function renderPlan() {
       <h2>${esc(formatDay(day))}</h2>
       <div class="suggestions">${entries.filter((p) => p.planned_for === day).map((p) => {
     const r = byId.get(p.recipe_id);
-    return `<div class="suggestion plan-entry" data-id="${p.id}">
+    return `<div class="suggestion plan-entry${altStack(r)}" data-id="${p.id}">
           ${r.images[0] ? `<img src="${esc(imageUrl(r.images[0]))}" alt="" loading="lazy">` : '<div class="placeholder" aria-hidden="true">🍲</div>'}
-          <div><h3><a href="#/r/${r.id}">${esc(r.title)}</a></h3>
+          <div><h3><a href="#/r/${r.id}">${esc(r.title)}</a>${altMark(r, byId)}</h3>
             <p class="missing">${p.servings} ${p.servings === 1 ? 'Person' : 'Personen'}${onLists.has(p.id) ? ' · <span class="on-list">✓ auf der Einkaufsliste</span>' : ''}</p>
             <div class="entry-actions">
               ${onLists.has(p.id) ? '' : `<button class="link" data-shop="${p.id}">Auf die Einkaufsliste</button>`}
@@ -2691,7 +2732,7 @@ async function loadCookbook(ownerId) {
 async function renderCookbook(ownerId) {
   app.innerHTML = '<p class="loading">Lade Kochbuch …</p>';
   cookbookCache.delete(ownerId);
-  const book = await loadCookbook(ownerId);
+  const [book] = await Promise.all([loadCookbook(ownerId), loadAlternatives()]);
   if (!book) {
     app.innerHTML = '<div class="notice"><p>Du hast keinen Zugriff (mehr) auf dieses Kochbuch.</p><a class="btn" href="#/geteilt">Zurück</a></div>';
     return;
@@ -2701,10 +2742,11 @@ async function renderCookbook(ownerId) {
     <h1>Kochbuch von ${esc(book.email)}</h1>
     <div class="search"><input type="search" id="q" placeholder="Rezepte durchsuchen" aria-label="Rezepte durchsuchen"></div>
     <div id="results" class="grid"></div>`;
+  const byId = new Map(book.recipes.map((r) => [r.id, r]));
   const draw = (q = '') => {
     const shown = book.recipes.filter((r) => !q || [r.title, r.description, ...r.tags].some((x) => x.toLowerCase().includes(q)));
     $('#results').innerHTML = shown.length
-      ? shown.map((r) => recipeCard(r, `#/kochbuch/${ownerId}/${r.id}`)).join('')
+      ? shown.map((r) => recipeCard(r, `#/kochbuch/${ownerId}/${r.id}`, byId)).join('')
       : '<p class="hint">Keine Rezepte gefunden.</p>';
   };
   $('#q').oninput = (e) => draw(e.target.value.trim().toLowerCase());

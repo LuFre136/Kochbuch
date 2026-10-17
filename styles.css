@@ -108,16 +108,43 @@ label small, .hint { font-weight: 400; color: var(--muted); font-size: 0.875rem;
 .chip.active { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 span.chip { cursor: default; background: var(--surface-2); }
 
-.alts { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: -4px 0 12px; }
+/* Alternativrezepte: Leiste mit den Titeln über dem Rezept */
+.alts {
+  display: grid; gap: 6px; margin: 0 0 14px; padding: 10px 12px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.alt-title { margin: 0; font-size: 0.85rem; font-weight: 600; color: var(--muted); }
+.alt-row { display: flex; align-items: center; gap: 8px; }
+.alt-tabs {
+  display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none;
+  margin: 0 -2px; padding: 2px; scroll-snap-type: x proximity;
+}
+.alt-tabs::-webkit-scrollbar { display: none; }
+.alt-tabs .chip { flex: none; scroll-snap-align: center; }
+.alt-tabs .chip small { opacity: 0.7; font-size: 0.75rem; }
 .alts .alt-nav {
   flex: none; width: 32px; height: 32px; border-radius: 999px; border: 1px solid var(--border);
   background: var(--surface); color: var(--text); font: inherit; font-size: 1.1rem; line-height: 1; cursor: pointer;
 }
 .alts .alt-nav[disabled] { opacity: 0.35; cursor: default; }
-.alt-dots { display: flex; gap: 6px; }
-.alt-dots .dot { width: 8px; height: 8px; border-radius: 999px; background: var(--border); }
-.alt-dots .dot.on { background: var(--accent); }
-.alts small { color: var(--muted); }
+.alts small { color: var(--muted); font-size: 0.8rem; }
+.swipe-hint {
+  margin: -8px 0 14px; padding: 8px 12px; border-radius: var(--radius); cursor: pointer;
+  background: var(--surface-2); border: 1px dashed var(--border); color: var(--muted); font-size: 0.875rem; text-align: center;
+}
+
+/* Kennzeichnung in Übersicht und Suche */
+.alt-badge {
+  display: inline-grid; place-items: center; min-width: 26px; height: 20px; margin-left: 6px; padding: 0 6px;
+  border-radius: 999px; background: var(--accent); color: #fff; font-size: 0.75rem; font-weight: 700;
+  vertical-align: middle;
+}
+.card.stacked, .suggestion.stacked { position: relative; }
+.card.stacked::after, .suggestion.stacked::after {
+  content: ''; position: absolute; inset: 6px -5px -5px 6px; z-index: -1;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.grid, .suggestions { isolation: isolate; }
 
 .chip.add { border-style: dashed; }
 
