@@ -73,6 +73,35 @@ export function seekTo(iframe, video, seconds) {
   }
 }
 
+// Der eingebettete Player meldet seinen Zustand nur, wenn er einmal darum gebeten wurde.
+// Ohne diese Bitte weiß die Seite nicht, ob gerade abgespielt wird.
+export function askPlayerState(iframe, video) {
+  const win = iframe?.contentWindow;
+  if (!win) return;
+  if (video.provider === 'youtube') {
+    win.postMessage(JSON.stringify({ event: 'listening', id: 1, channel: 'widget' }), '*');
+  } else {
+    win.postMessage({ type: 'listening', 'x-tiktok-player': true }, '*');
+  }
+}
+
+// Liest aus einer Nachricht des Players, ob abgespielt wird: 'playing', 'stopped' oder
+// null, wenn die Nachricht nichts über den Zustand sagt. 1 = läuft, 3 = puffert.
+export function playerState(data) {
+  let msg = data;
+  if (typeof msg === 'string') {
+    try { msg = JSON.parse(msg); } catch { return null; }
+  }
+  if (!msg || typeof msg !== 'object') return null;
+  const kind = msg.event ?? msg.type;
+  let state = null;
+  if (kind === 'onStateChange') state = msg.info ?? msg.value;
+  else if (kind === 'infoDelivery') state = msg.info?.playerState;
+  if (typeof state === 'string' && state.trim() !== '') state = Number(state);
+  if (typeof state !== 'number' || !Number.isFinite(state)) return null;
+  return state === 1 || state === 3 ? 'playing' : 'stopped';
+}
+
 // Ein Schritt ist entweder ein Text (alte Rezepte) oder { text, t, v }: t = Sekunden im
 // Video, v = Kennung des Videos. Alte Schritte ohne v gehören zum ersten Video.
 export const stepText = (s) => (typeof s === 'string' ? s : String(s?.text ?? ''));

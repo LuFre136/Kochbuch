@@ -11,7 +11,7 @@ import { CATEGORIES, guessCategory, categoryKey, categoryRank } from './categori
 import { DEFAULT_PLACES, guessPlaces } from './places.js';
 import { linkify } from './links.js';
 import {
-  videoOf, videosOf, videoKey, embedUrl, seekTo, stepText, stepTime, stepVideo,
+  videoOf, videosOf, videoKey, embedUrl, seekTo, askPlayerState, playerState, stepText, stepTime, stepVideo,
   dropMissingTimes, makeStep, formatTime,
 } from './video.js';
 import {
@@ -864,6 +864,17 @@ function enableRecipeSwipe(el, go) {
   el.addEventListener('pointercancel', stop);
 }
 
+// Ob das Video oben gerade läuft. Ein Player, der noch nicht gestartet wurde, nimmt keine
+// Sprungbefehle an — dann wird er für einen Zeitstempel mit der Startzeit neu geladen.
+// Der Zustand kommt aus den Nachrichten des Players (siehe askPlayerState).
+let playerPlaying = false;
+window.addEventListener('message', (e) => {
+  const frame = document.querySelector('#video');
+  if (!frame || e.source !== frame.contentWindow) return;
+  const state = playerState(e.data);
+  if (state) playerPlaying = state === 'playing';
+});
+
 // Einmaliger Hinweis, dass zwischen den Alternativen gewischt werden kann. Er geht weg,
 // sobald einmal gewechselt wurde.
 const ALT_HINT = 'altHintSeen';
@@ -987,10 +998,11 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
       ${r.ingredients.length ? `<section>
         <div class="section-head">
           <h2>Zutaten</h2>
-          <div class="stepper" role="group" aria-label="Personenzahl">
-            <button class="btn small" data-d="-1" aria-label="Weniger Personen">−</button>
-            <span id="srv" aria-live="polite"></span>
-            <button class="btn small" data-d="1" aria-label="Mehr Personen">+</button>
+          <div class="stepper" role="group" aria-label="Anzahl Portionen">
+            <button class="btn small" data-d="-1" aria-label="Eine Portion weniger">−</button>
+            <label class="srv-field"><input id="srv" type="number" min="1" max="100" step="1"
+              inputmode="numeric" value="${servings}" aria-label="Anzahl Portionen"><span id="srv-unit"></span></label>
+            <button class="btn small" data-d="1" aria-label="Eine Portion mehr">+</button>
           </div>
         </div>
         <ul class="ingredients" id="ing"></ul>
@@ -1041,18 +1053,33 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
   }
 
   const ingList = $('#ing');
-  const drawIngredients = () => {
+  // keepInput: beim Tippen im Feld bleibt die Eingabe stehen, nur die Mengen rechnen neu.
+  const drawIngredients = ({ keepInput = false } = {}) => {
     if (!ingList) return;
-    $('#srv').textContent = `${servings} ${servings === 1 ? 'Person' : 'Personen'}`;
+    const srv = $('#srv');
+    if (srv && !keepInput) srv.value = String(servings);
+    $('#srv-unit').textContent = servings === 1 ? 'Portion' : 'Portionen';
     const factor = servings / r.servings;
     ingList.innerHTML = r.ingredients.map((i) => `<li><span class="qty">${esc(formatQuantity(i, factor))}</span><span>${ingredientLabel(i)}</span></li>`).join('');
   };
+  const setServings = (n, opts) => {
+    servings = Math.max(1, Math.min(100, Math.round(n)));
+    drawIngredients(opts);
+  };
   app.querySelectorAll('.stepper button').forEach((b) => {
-    b.onclick = () => {
-      servings = Math.max(1, Math.min(100, servings + Number(b.dataset.d)));
-      drawIngredients();
-    };
+    b.onclick = () => setServings(servings + Number(b.dataset.d));
   });
+  // Die Zahl kann auch getippt werden. Halbfertige Eingaben (leeres Feld) bleiben stehen,
+  // beim Verlassen wird auf den geltenden Wert zurückgesetzt.
+  const srvInput = $('#srv');
+  if (srvInput) {
+    srvInput.addEventListener('input', () => {
+      const n = Number(srvInput.value);
+      if (!Number.isFinite(n) || n < 1) return;
+      setServings(n, { keepInput: true });
+    });
+    srvInput.addEventListener('blur', () => { srvInput.value = String(servings); });
+  }
   drawIngredients();
 
   // Bilder: waagerecht durchwischen, Zähler und Pfeile für Rechner.
@@ -1071,25 +1098,39 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
   };
   bindGallery();
 
-  // Zeigt ein Video oder die Bilder. Läuft das Video schon, springt der Player selbst;
-  // sonst wird es neu geladen und springt, sobald es bereit ist.
+  // Bittet den geladenen Player, seinen Zustand zu melden. TikTok kennt keine Startzeit in
+  // der Adresse und springt deshalb erst nach dem Laden.
+  const watchPlayer = (entry, seconds = null) => {
+    const frame = $('#video');
+    if (!frame || !entry?.video) return;
+    frame.addEventListener('load', () => {
+      askPlayerState(frame, entry.video);
+      if (seconds != null && entry.video.provider !== 'youtube') seekTo(frame, entry.video, seconds);
+    }, { once: true });
+  };
+  if (shown?.video) watchPlayer(shown);
+
+  // Zeigt ein Video oder die Bilder. Läuft das Video gerade, springt der Player an die
+  // Stelle; sonst wird es mit der Startzeit neu geladen und spielt von dort an — ein noch
+  // nicht gestarteter Player nimmt keine Sprungbefehle an.
+  const mountMedia = (entry, seconds = null) => {
+    playerPlaying = false;
+    const box = $('#media-box');
+    box.innerHTML = mediaHtml(entry, seconds);
+    if (!entry.video) { bindGallery(); return; }
+    watchPlayer(entry, seconds);
+  };
   const showMedia = (key, seconds = null) => {
     const box = $('#media-box');
     const next = tabs.find((t) => t.key === key);
     if (!box || !next) return;
     box.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    if (next.key === shown.key) {
-      if (next.video && seconds != null) seekTo($('#video'), next.video, seconds);
-      return;
-    }
+    const same = next.key === shown.key;
+    if (same && (!next.video || seconds == null)) return;
+    // Läuft dasselbe Video schon, reicht ein Sprung: die Wiedergabe bricht nicht ab.
+    if (same && playerPlaying) { seekTo($('#video'), next.video, seconds); return; }
     shown = next;
-    box.innerHTML = mediaHtml(next, seconds);
-    // TikTok kennt keine Startzeit in der Adresse, springt also erst nach dem Laden.
-    if (next.video && seconds != null && next.video.provider !== 'youtube') {
-      const frame = $('#video');
-      frame.addEventListener('load', () => seekTo(frame, next.video, seconds), { once: true });
-    }
-    if (!next.video) bindGallery();
+    mountMedia(next, seconds);
     app.querySelectorAll('#media-tabs [data-media]').forEach((t) => {
       const on = t.dataset.media === next.key;
       t.classList.toggle('active', on);
@@ -1210,7 +1251,7 @@ async function saveAlternatives(recipeId, wanted) {
 // ---------- Rezepte kombinieren ----------
 
 // Stellt aus den Schritten mehrerer Rezepte ein neues zusammen. mainId: das Hauptrezept,
-// aus dem Zutaten und Personenzahl zunächst übernommen werden.
+// aus dem Zutaten und Portionen zunächst übernommen werden.
 async function renderCombine(mainId) {
   const { all } = await searchableRecipes();
   const main = all.find((x) => x.id === mainId) ?? all[0];
@@ -1236,7 +1277,7 @@ async function renderCombine(mainId) {
     <div class="combine">
       <a class="back" href="#/r/${esc(main.id)}">← ${esc(main.title)}</a>
       <h1>Rezepte kombinieren</h1>
-      <p class="hint">Hauptrezept ist <strong>${esc(main.title)}</strong>: seine Zutaten und ${servings} ${servings === 1 ? 'Person' : 'Personen'} stehen schon im neuen Rezept.
+      <p class="hint">Hauptrezept ist <strong>${esc(main.title)}</strong>: seine Zutaten und ${servings} ${servings === 1 ? 'Portion' : 'Portionen'} stehen schon im neuen Rezept.
         Tippe die Schritte in der Reihenfolge an, in der du kochen willst.</p>
       <div class="chips static" id="combine-recipes"></div>
       <button type="button" class="btn small" id="combine-add">+ Rezept</button>
@@ -1649,7 +1690,7 @@ async function renderEditor(id) {
       </fieldset>
 
       <div class="cols">
-        <label>Personen <input name="servings" type="number" min="1" max="100" required value="${r.servings}"></label>
+        <label>Anzahl Portionen <input name="servings" type="number" min="1" max="100" required value="${r.servings}"></label>
         <label>Gesamtzeit (Min.) <input name="total_minutes" type="number" min="0" inputmode="numeric" value="${r.total_minutes ?? ''}"></label>
         <label>Koch-/Backzeit (Min.) <input name="cook_minutes" type="number" min="0" inputmode="numeric" value="${r.cook_minutes ?? ''}"></label>
       </div>
@@ -1664,7 +1705,7 @@ async function renderEditor(id) {
       </details>
 
       <label>Zutaten <textarea name="ingredients" rows="8" placeholder="200 g Mehl&#10;2 Eier&#10;1 Prise Salz">${esc(r.ingredients.map(ingredientToLine).join('\n'))}</textarea>
-        <small>Eine Zutat pro Zeile, Menge zuerst. Die Menge bezieht sich auf die Personenzahl oben.</small></label>
+        <small>Eine Zutat pro Zeile, Menge zuerst. Die Menge bezieht sich auf die Anzahl Portionen oben.</small></label>
       <ul class="parse-preview" id="preview"></ul>
 
       <fieldset>
@@ -2021,7 +2062,7 @@ function setupPlanning(r, currentServings) {
 async function planRecipe(r, servings = r.servings) {
   const { value, form } = await openSheet(`<h2>„${esc(r.title)}“ einplanen</h2>
     <label>Datum <input type="date" name="date" required min="${today()}" value="${today()}"></label>
-    <label>Personen <input type="number" name="servings" min="1" max="100" required value="${servings}"></label>
+    <label>Anzahl Portionen <input type="number" name="servings" min="1" max="100" required value="${servings}"></label>
     ${r.ingredients.length ? '<label class="check"><input type="checkbox" name="shop" checked> Zutaten auf die Einkaufsliste setzen</label>' : ''}
     <div class="row">
       <button class="btn primary" value="ok">Einplanen</button>
@@ -2061,7 +2102,7 @@ async function renderPlan() {
     return `<div class="suggestion plan-entry${altStack(r)}" data-id="${p.id}">
           ${r.images[0] ? `<img src="${esc(imageUrl(r.images[0]))}" alt="" loading="lazy">` : '<div class="placeholder" aria-hidden="true">🍲</div>'}
           <div><h3><a href="#/r/${r.id}">${esc(r.title)}</a>${altMark(r, byId)}</h3>
-            <p class="missing">${p.servings} ${p.servings === 1 ? 'Person' : 'Personen'}${onLists.has(p.id) ? ' · <span class="on-list">✓ auf der Einkaufsliste</span>' : ''}</p>
+            <p class="missing">${p.servings} ${p.servings === 1 ? 'Portion' : 'Portionen'}${onLists.has(p.id) ? ' · <span class="on-list">✓ auf der Einkaufsliste</span>' : ''}</p>
             <div class="entry-actions">
               ${onLists.has(p.id) ? '' : `<button class="link" data-shop="${p.id}">Auf die Einkaufsliste</button>`}
               <button class="link danger-link" data-remove="${p.id}">Entfernen</button>

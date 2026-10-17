@@ -227,7 +227,9 @@ ul.hint { margin: 8px 0 0; padding-left: 1.2rem; }
 .section-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
 .stepper { display: flex; align-items: center; gap: 8px; }
 .stepper .btn { width: 36px; padding: 0; font-size: 1.2rem; }
-.stepper span { min-width: 92px; text-align: center; font-weight: 600; }
+.stepper span { text-align: center; font-weight: 600; }
+.srv-field { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.srv-field input { width: 3.6rem; padding: 6px 4px; text-align: center; font-weight: 600; }
 
 .ingredients, .parse-preview { list-style: none; padding: 0; margin: 0; }
 .ingredients li, .parse-preview li {
