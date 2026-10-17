@@ -48,6 +48,29 @@ export function suggestAlternatives(recipe, candidates, links, { limit = 5, comp
     .map((s) => s.recipe);
 }
 
+// Rezepte, die mindestens einen der ausgewählten Tags haben; je mehr davon, desto weiter
+// vorne. Für den Reiter "Tags" in den Auswahl-Dialogen: ist dort kein Tag ausgewählt,
+// zählen alle Tags des Rezepts (suggestAlternatives), sonst nur die ausgewählten.
+export function filterByTags(candidates, tags, { exclude = [], limit = 50, compare = (a, b) => a.localeCompare(b) } = {}) {
+  const want = new Set((tags ?? []).map((t) => t.toLowerCase()));
+  if (!want.size) return [];
+  const skip = new Set(exclude);
+  return candidates
+    .filter((c) => !skip.has(c.id))
+    .map((c) => ({ recipe: c, shared: tagMatches(c.tags, tags).length }))
+    .filter((x) => x.shared > 0)
+    .sort((a, b) => b.shared - a.shared || compare(a.recipe.title, b.recipe.title))
+    .slice(0, limit)
+    .map((x) => x.recipe);
+}
+
+// Die Tags eines Rezepts, die unter den gesuchten vorkommen — groß/klein egal. Damit
+// werden in der Trefferliste die passenden Tags hervorgehoben.
+export function tagMatches(candidateTags, tags) {
+  const want = new Set((tags ?? []).map((t) => t.toLowerCase()));
+  return (candidateTags ?? []).filter((t) => want.has(String(t).toLowerCase()));
+}
+
 // Alternativen der schon verknüpften Rezepte, also die Gruppe einen Schritt weiter.
 // Liefert { id, via } je Rezept: via = das verknüpfte Rezept, über das es gefunden wurde.
 // Das Rezept selbst und schon Verknüpftes bleiben weg, jedes Rezept kommt einmal.

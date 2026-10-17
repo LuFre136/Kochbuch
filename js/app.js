@@ -16,6 +16,7 @@ import {
 } from './video.js';
 import {
   pairOf, alternativeIds, alternativeGroup, suggestAlternatives, relatedAlternatives,
+  filterByTags, tagMatches,
 } from './alternatives.js';
 import {
   ingredientsFromStep, remainingIngredients, ingredientKey, mentionsIngredient,
@@ -1422,7 +1423,17 @@ async function renderCombine(mainId) {
 
   $('#combine-add').onclick = async () => {
     const taken = new Set(chosen.map((x) => x.id));
-    const picked2 = await pickRecipeSheet(all.filter((x) => !taken.has(x.id)), 'Rezept zum Kombinieren');
+    const offer = all.filter((x) => !taken.has(x.id));
+    const inPicker = new Map(offer.map((x) => [x.id, x]));
+    // Reiter wie beim Hinzufügen von Alternativen: Tags der beteiligten Rezepte, deren
+    // Alternativen, Titelsuche.
+    const related = relatedAlternatives(links, main.id, [...taken])
+      .filter((x) => inPicker.has(x.id))
+      .map((x) => ({ r: inPicker.get(x.id), note: `Alternative zu ${byId(x.via)?.title ?? 'einem Rezept'}` }));
+    const picked2 = await pickRecipeSheet(offer, 'Rezept zum Kombinieren', {
+      tags: [...new Set(chosen.flatMap((x) => x.tags))].sort(collator.compare),
+      related,
+    });
     if (!picked2) return;
     const r = all.find((x) => x.id === picked2);
     if (r) { chosen.push(r); active = r.id; }
@@ -1505,33 +1516,100 @@ function openPicker(title, body) {
   return dialog;
 }
 
-// Zeile in einer Trefferliste: ein Rezept zum Antippen, mit Zusatz und Haken.
-const pickRow = (r, { note = '', on = false, extra = '' } = {}) => `<div class="pick-item">
+// Zeile in einer Trefferliste: ein Rezept zum Antippen, mit Zusatz, Tags und Haken.
+const pickRow = (r, { note = '', on = false, extra = '', tags = '' } = {}) => `<div class="pick-item">
   <button type="button" class="pick-row${on ? ' on' : ''}" data-pick="${esc(r.id)}" aria-pressed="${on}">
-    <span>${esc(r.title)}${note ? `<small>${esc(note)}</small>` : ''}</span>
+    <span>${esc(r.title)}${note ? `<small>${esc(note)}</small>` : ''}${tags}</span>
     <span class="pick-mark">${on ? '✓' : '+'}</span>
   </button>${extra}</div>`;
 
-// Ein Rezept auswählen, z. B. zum Kombinieren. Liefert die Kennung oder null.
-function pickRecipeSheet(candidates, title = 'Rezept wählen') {
+// Reiterleiste der Auswahl-Dialoge. Ein Reiter ohne Treffer ist ausgegraut und nicht
+// anwählbar; die Zahlen kommen vom Dialog, weil sie sich mit jeder Auswahl ändern.
+const PICK_TABS = ['tags', 'verwandte', 'titel'];
+const pickTabsHtml = (tab, counts, relatedLabel) => {
+  const label = { tags: 'Tags', verwandte: relatedLabel, titel: 'Titel' };
+  return PICK_TABS.map((t) => `<button type="button" class="chip${t === tab ? ' active' : ''}"
+    data-tab="${t}"${counts[t] ? '' : ' disabled'}>${esc(label[t])}</button>`).join('');
+};
+
+// Die Tags des eigenen Rezepts als Filter: mehrere lassen sich auswählen, dann zählen
+// nur diese. Ohne Auswahl zählen alle Tags.
+const tagFilterHtml = (tags, active) => (tags.length ? `<div class="chips static pick-tags">
+  <span class="hint">Tags:</span>${tags.map((t) => `<button type="button"
+    class="chip small${active.includes(t) ? ' active' : ''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}
+  ${active.length ? '<button type="button" class="chip small ghost" data-tag-clear>alle</button>' : ''}</div>` : '');
+
+// Die Tags eines Treffers; die passenden sind hervorgehoben.
+const pickTagsHtml = (r, highlight) => {
+  if (!r.tags?.length) return '';
+  const hit = new Set(tagMatches(r.tags, highlight).map((t) => t.toLowerCase()));
+  return `<span class="pick-tag-row">${r.tags.map((t) => `<span class="pick-tag${hit.has(t.toLowerCase()) ? ' match' : ''}">${esc(t)}</span>`).join('')}</span>`;
+};
+
+// Ein Rezept auswählen, z. B. zum Kombinieren: dieselben Reiter wie beim Hinzufügen von
+// Alternativen. tags: Tags der schon beteiligten Rezepte, related: deren Alternativen als
+// { r, note }. Liefert die Kennung oder null.
+function pickRecipeSheet(candidates, title = 'Rezept wählen', { tags = [], related = [], relatedLabel = 'Alternativen' } = {}) {
   return new Promise((resolve) => {
-    const dialog = openPicker(title, `<input id="pick-q" type="search" placeholder="Titel oder Tag" autocomplete="off" enterkeyhint="search">
+    let tab = 'tags';
+    let active = []; // ausgewählte Tags
+    const dialog = openPicker(title, `
+      <div class="chips" id="pick-tabs"></div>
+      <div id="pick-filter"></div>
+      <input id="pick-q" type="search" placeholder="Titel oder Tag" autocomplete="off" enterkeyhint="search" hidden>
       <div class="pick-list" id="pick-hits"></div>`);
     const input = dialog.querySelector('#pick-q');
     const hits = dialog.querySelector('#pick-hits');
     let picked = null;
-    const draw = () => {
+
+    const byTags = () => (active.length
+      ? filterByTags(candidates, active, { compare: collator.compare })
+      : filterByTags(candidates, tags, { compare: collator.compare }));
+    const byTitle = () => {
       const q = input.value.trim().toLowerCase();
-      const found = candidates
+      return candidates
         .filter((r) => !q || r.title.toLowerCase().includes(q) || r.tags.some((t) => t.toLowerCase().includes(q)))
         .slice(0, 30);
-      hits.innerHTML = found.length ? found.map((r) => pickRow(r)).join('') : '<p class="hint">Kein Rezept gefunden.</p>';
+    };
+
+    const drawTabs = () => {
+      const counts = { tags: tags.length, verwandte: related.length, titel: candidates.length };
+      dialog.querySelector('#pick-tabs').innerHTML = pickTabsHtml(tab, counts, relatedLabel);
+      dialog.querySelectorAll('[data-tab]').forEach((b) => {
+        b.onclick = () => { tab = b.dataset.tab; drawAll(); };
+      });
+    };
+
+    const drawFilter = () => {
+      dialog.querySelector('#pick-filter').innerHTML = tab === 'tags' ? tagFilterHtml(tags, active) : '';
+      dialog.querySelectorAll('[data-tag]').forEach((b) => {
+        b.onclick = () => {
+          const t = b.dataset.tag;
+          active = active.includes(t) ? active.filter((x) => x !== t) : [...active, t];
+          drawAll();
+        };
+      });
+      const clear = dialog.querySelector('[data-tag-clear]');
+      if (clear) clear.onclick = () => { active = []; drawAll(); };
+    };
+
+    const drawHits = () => {
+      input.hidden = tab !== 'titel';
+      const list = tab === 'verwandte' ? related : (tab === 'tags' ? byTags() : byTitle()).map((r) => ({ r, note: '' }));
+      const highlight = tab === 'tags' ? (active.length ? active : tags) : [];
+      hits.innerHTML = list.length
+        ? list.map(({ r, note }) => pickRow(r, { note, tags: pickTagsHtml(r, highlight) })).join('')
+        : `<p class="hint">${tab === 'verwandte' ? 'Die beteiligten Rezepte haben keine Alternativen.'
+          : tab === 'tags' ? 'Kein Rezept mit diesen Tags. Suche unter „Titel“.' : 'Kein Rezept gefunden.'}</p>`;
       hits.querySelectorAll('[data-pick]').forEach((b) => {
         b.onclick = () => { picked = b.dataset.pick; dialog.close(); };
       });
     };
-    input.oninput = draw;
-    draw();
+
+    const drawAll = () => { drawTabs(); drawFilter(); drawHits(); };
+    if (!byTags().length) tab = related.length ? 'verwandte' : 'titel';
+    input.oninput = drawHits;
+    drawAll();
     dialog.addEventListener('close', () => resolve(picked));
   });
 }
@@ -1543,9 +1621,11 @@ function alternativesSheet({ selfId, tags, candidates, linked }) {
     const byId = new Map(candidates.map((r) => [r.id, r]));
     let chosen = [...linked];
     let tab = 'tags';
+    let activeTags = []; // ausgewählte Tags des Rezepts; ohne Auswahl zählen alle
     let ask = null; // Kennung des Rezepts, zu dessen Gruppe gerade gefragt wird
     const dialog = openPicker('Alternative hinzufügen', `
       <div class="chips" id="alt-tabs"></div>
+      <div id="alt-filter"></div>
       <input id="alt-q" type="search" placeholder="Titel oder Tag" autocomplete="off" enterkeyhint="search" hidden>
       <div class="pick-list" id="alt-hits"></div>
       <footer class="picker-foot">
@@ -1555,8 +1635,11 @@ function alternativesSheet({ selfId, tags, candidates, linked }) {
     const input = dialog.querySelector('#alt-q');
     const hits = dialog.querySelector('#alt-hits');
 
-    // Vorschläge nach gemeinsamen Tags; schon verknüpfte stehen mit Haken dabei.
-    const byTags = () => suggestAlternatives({ id: selfId, tags }, candidates, [], { limit: 50, compare: collator.compare });
+    // Vorschläge nach gemeinsamen Tags; schon verknüpfte stehen mit Haken dabei. Sind
+    // Tags ausgewählt, zählen nur diese.
+    const byTags = () => (activeTags.length
+      ? filterByTags(candidates, activeTags, { exclude: [selfId], compare: collator.compare })
+      : suggestAlternatives({ id: selfId, tags }, candidates, [], { limit: 50, compare: collator.compare }));
     // Alternativen der schon verknüpften Rezepte, also die Gruppe einen Schritt weiter.
     const related = () => relatedAlternatives(links, selfId, chosen)
       .filter((x) => byId.has(x.id))
@@ -1569,13 +1652,27 @@ function alternativesSheet({ selfId, tags, candidates, linked }) {
     };
 
     const drawTabs = () => {
-      const counts = { tags: byTags().length, verwandte: related().length, titel: candidates.length };
-      const label = { tags: 'Tags', verwandte: 'Verwandte', titel: 'Titel' };
-      dialog.querySelector('#alt-tabs').innerHTML = ['tags', 'verwandte', 'titel'].map((t) => `<button type="button"
-        class="chip${t === tab ? ' active' : ''}" data-tab="${t}"${counts[t] ? '' : ' disabled'}>${label[t]}</button>`).join('');
+      // Der Reiter "Tags" bleibt anwählbar, solange das Rezept Tags hat — auch wenn ein
+      // gesetzter Filter gerade nichts findet.
+      const counts = { tags: tags.length, verwandte: related().length, titel: candidates.length };
+      dialog.querySelector('#alt-tabs').innerHTML = pickTabsHtml(tab, counts, 'Verwandte');
       dialog.querySelectorAll('[data-tab]').forEach((b) => {
         b.onclick = () => { tab = b.dataset.tab; ask = null; drawAll(); };
       });
+    };
+
+    const drawFilter = () => {
+      dialog.querySelector('#alt-filter').innerHTML = tab === 'tags' ? tagFilterHtml(tags, activeTags) : '';
+      dialog.querySelectorAll('[data-tag]').forEach((b) => {
+        b.onclick = () => {
+          const t = b.dataset.tag;
+          activeTags = activeTags.includes(t) ? activeTags.filter((x) => x !== t) : [...activeTags, t];
+          ask = null;
+          drawAll();
+        };
+      });
+      const clear = dialog.querySelector('[data-tag-clear]');
+      if (clear) clear.onclick = () => { activeTags = []; ask = null; drawAll(); };
     };
 
     const drawChosen = () => {
@@ -1590,6 +1687,7 @@ function alternativesSheet({ selfId, tags, candidates, linked }) {
 
     const drawHits = () => {
       const list = tab === 'verwandte' ? related() : (tab === 'tags' ? byTags() : byTitle()).map((r) => ({ r, note: '' }));
+      const highlight = tab === 'tags' ? (activeTags.length ? activeTags : tags) : [];
       input.hidden = tab !== 'titel';
       hits.innerHTML = list.length ? list.map(({ r, note }) => {
         const on = chosen.includes(r.id);
@@ -1599,10 +1697,11 @@ function alternativesSheet({ selfId, tags, candidates, linked }) {
           <p>„${esc(r.title)}“ hat ${group.length === 1 ? 'eine weitere Alternative' : `${group.length} weitere Alternativen`}. Auch verknüpfen?</p>
           <div class="row"><button type="button" class="btn small primary" data-group="${esc(r.id)}">Alle ${group.length + 1} verknüpfen</button>
             <button type="button" class="btn small ghost" data-only="${esc(r.id)}">Nur „${esc(r.title)}“</button></div></div>` : '';
-        return pickRow(r, { note, on, extra });
+        return pickRow(r, { note, on, extra, tags: pickTagsHtml(r, highlight) });
       }).join('') : `<p class="hint">${tab === 'verwandte'
         ? 'Die verknüpften Rezepte haben selbst keine weiteren Alternativen.'
-        : tab === 'tags' ? 'Keine Vorschläge – die Tags passen zu keinem anderen Rezept. Suche unter „Titel“.' : 'Kein Rezept gefunden.'}</p>`;
+        : tab === 'tags' ? (activeTags.length ? 'Kein Rezept mit diesen Tags. Nimm einen Tag heraus oder suche unter „Titel“.'
+          : 'Keine Vorschläge – die Tags passen zu keinem anderen Rezept. Suche unter „Titel“.') : 'Kein Rezept gefunden.'}</p>`;
 
       hits.querySelectorAll('[data-pick]').forEach((b) => {
         b.onclick = () => {
@@ -1623,7 +1722,7 @@ function alternativesSheet({ selfId, tags, candidates, linked }) {
       hits.querySelectorAll('[data-only]').forEach((b) => { b.onclick = () => { ask = null; drawAll(); }; });
     };
 
-    const drawAll = () => { drawTabs(); drawHits(); drawChosen(); };
+    const drawAll = () => { drawTabs(); drawFilter(); drawHits(); drawChosen(); };
     if (!byTags().length) tab = 'titel';
     input.oninput = drawHits;
     drawAll();
