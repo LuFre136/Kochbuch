@@ -4,7 +4,7 @@ import {
 } from './ingredients.js';
 import { suggestRecipes, STAPLES } from './pantry.js';
 import {
-  additionsFromPlan, findConflict, mergeInto, removeRecipe, recipesOnList, plannedIds, formatItemQuantity,
+  additionsFromPlan, findConflict, mergeInto, removeRecipe, removePlanEntry, recipesOnList, plannedIds, formatItemQuantity,
 } from './shopping.js';
 import { PRODUCE, MONTHS, seasonOf, inSeason, seasonalRecipes } from './season.js';
 
@@ -979,7 +979,18 @@ async function renderPlan() {
   const toShop = (list) => list.map((p) => ({ plan_id: p.id, recipe: byId.get(p.recipe_id), servings: p.servings }));
   app.querySelectorAll('[data-remove]').forEach((b) => {
     b.onclick = async () => {
-      const { error } = await supabase.from('meal_plan').delete().eq('id', b.dataset.remove);
+      const id = b.dataset.remove;
+      if (onLists.has(id)) {
+        const title = byId.get(entries.find((p) => p.id === id).recipe_id).title;
+        const { value } = await openSheet(`<h2>„${esc(title)}“ steht auf der Einkaufsliste</h2>
+          <p>Sollen die Zutaten dafür auch von der Einkaufsliste genommen werden?</p>
+          <div class="row"><button class="btn primary" value="both">Auch von der Liste nehmen</button>
+            <button class="btn" value="plan">Nur aus dem Plan</button>
+            <button class="btn ghost" value="cancel">Abbrechen</button></div>`);
+        if (value !== 'both' && value !== 'plan') return;
+        if (value === 'both' && !(await removePlanFromLists(id))) return;
+      }
+      const { error } = await supabase.from('meal_plan').delete().eq('id', id);
       if (error) toast(error.message); else renderPlan();
     };
   });
@@ -1024,6 +1035,20 @@ async function loadItems(listId) {
   const { data, error } = await supabase.from('shopping_items').select('*').eq('list_id', listId).order('created_at');
   if (error) throw error;
   return data;
+}
+
+// Nimmt die Zutaten eines Plan-Eintrags von allen Listen. Liefert false bei einem Fehler.
+async function removePlanFromLists(planId) {
+  const { data, error } = await supabase.from('shopping_items').select('*');
+  if (error) { toast(error.message); return false; }
+  const { updates, deletes } = removePlanEntry(data, planId);
+  const results = await Promise.all([
+    ...updates.map(({ id, ...patch }) => supabase.from('shopping_items').update(patch).eq('id', id)),
+    deletes.length ? supabase.from('shopping_items').delete().in('id', deletes) : null,
+  ].filter(Boolean));
+  const failed = results.find((r) => r.error);
+  if (failed) { toast(failed.error.message); return false; }
+  return true;
 }
 
 // Welche Plan-Einträge schon auf irgendeiner Liste stehen.

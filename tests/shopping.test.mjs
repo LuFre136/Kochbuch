@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   itemKey, unitsCompatible, convert, additionsFromPlan, findConflict, mergeInto, removeRecipe,
-  recipesOnList, plannedIds, formatItemQuantity,
+  recipesOnList, plannedIds, formatItemQuantity, removePlanEntry,
 } from '../js/shopping.js';
 
 const brot = {
@@ -117,4 +117,16 @@ test('Grundzutaten kommen nicht auf die Liste', () => {
     { amount: null, unit: '', name: 'Salz und Pfeffer' }, { amount: 50, unit: 'g', name: 'Butter oder Öl' },
   ] };
   assert.deepEqual(additionsFromPlan([{ plan_id: 'p', recipe: r, servings: 1 }]).map((a) => a.name), ['Mehl']);
+});
+
+test('einen Plan-Eintrag von der Liste nehmen, andere Tage desselben Rezepts bleiben', () => {
+  const items = [
+    { id: '1', name: 'Mehl', amount: 500, unit: 'g', manual: false, sources: [
+      { recipe_id: 'r1', plan_id: 'mo', title: 'Brot', amount: 250 }, { recipe_id: 'r1', plan_id: 'fr', title: 'Brot', amount: 250 }] },
+    { id: '2', name: 'Hefe', amount: 1, unit: 'Würfel', manual: false, sources: [{ recipe_id: 'r1', plan_id: 'mo', title: 'Brot', amount: 1 }] },
+  ];
+  assert.deepEqual(removePlanEntry(items, 'mo'), {
+    updates: [{ id: '1', amount: 250, sources: [{ recipe_id: 'r1', plan_id: 'fr', title: 'Brot', amount: 250 }] }],
+    deletes: ['2'],
+  });
 });
