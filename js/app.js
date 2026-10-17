@@ -1,12 +1,13 @@
 import { supabase, isConfigured, IMAGE_BUCKET } from './supabase.js';
 import {
-  parseIngredientText, parseIngredientLine, formatQuantity, ingredientToLine,
+  parseIngredientText, parseIngredientLine, formatQuantity, ingredientToLine, ingredientParts,
 } from './ingredients.js';
 import { suggestRecipes, STAPLES } from './pantry.js';
 import {
   additionsFromPlan, findConflict, mergeInto, removeRecipe, removePlanEntry, recipesOnList, plannedIds, formatItemQuantity,
 } from './shopping.js';
 import { PRODUCE, MONTHS, seasonOf, inSeason, seasonalRecipes } from './season.js';
+import { CATEGORIES, guessCategory, categoryKey, categoryRank } from './categories.js';
 import {
   videoOf, embedUrl, seekTo, stepText, stepTime, makeStep, formatTime,
 } from './video.js';
@@ -18,6 +19,8 @@ const tabbar = document.getElementById('tabbar');
 let session = null;
 let recipes = null; // Cache aller eigenen Rezepte
 let listQuery = '';
+let categories = null; // eigene Zutaten-Kategorien: Map Schlüssel → Kategorie; null = noch nicht geladen
+let categoriesSaved = true; // false, solange kategorien.sql nicht ausgeführt wurde
 let myName; // Benutzername: undefined = noch nicht geladen, null = fehlt noch, false = benutzername.sql nicht eingerichtet
 let activeTag = null;
 let listSort = 'name';
@@ -72,6 +75,56 @@ async function loadRecipes(force = false) {
   if (error) throw error;
   recipes = data.sort((a, b) => collator.compare(a.title, b.title));
   return recipes;
+}
+
+// ---------- Zutaten-Kategorien ----------
+
+async function loadCategories() {
+  if (categories) return categories;
+  const { data, error } = await supabase.from('ingredient_categories').select('key, category');
+  categoriesSaved = !error;
+  categories = new Map((data ?? []).map((c) => [c.key, c.category]));
+  return categories;
+}
+
+// Eigene Kategorie einer Zutat, sonst ein Vorschlag anhand des Namens.
+function categoryOf(name) {
+  return categories?.get(categoryKey(name)) ?? guessCategory(name);
+}
+
+// Merkt sich für Zutaten, die zum ersten Mal vorkommen, die vorgeschlagene Kategorie.
+// Bereits vorhandene eigene Zuordnungen bleiben unverändert.
+async function rememberCategories(names) {
+  await loadCategories();
+  const rows = new Map();
+  for (const name of names) {
+    const key = categoryKey(name);
+    if (key && !categories.has(key) && !rows.has(key)) rows.set(key, { key, category: guessCategory(name) });
+  }
+  if (!rows.size) return;
+  rows.forEach((row) => categories.set(row.key, row.category));
+  if (!categoriesSaved) return;
+  const { error } = await supabase.from('ingredient_categories')
+    .upsert([...rows.values()], { onConflict: 'owner_id,key', ignoreDuplicates: true });
+  if (error) console.warn(error);
+}
+
+async function setCategory(name, category) {
+  const key = categoryKey(name);
+  if (!key) return;
+  await loadCategories();
+  categories.set(key, category);
+  if (!categoriesSaved) { toast('Kategorien werden erst gespeichert, wenn kategorien.sql ausgeführt ist.'); return; }
+  const { error } = await supabase.from('ingredient_categories').upsert({ key, category }, { onConflict: 'owner_id,key' });
+  if (error) toast(error.message);
+}
+
+const categoryOptions = (selected) => CATEGORIES.map((c) => `<option${c === selected ? ' selected' : ''}>${esc(c)}</option>`).join('');
+
+// Name einer Zutat mit ihrer Anmerkung (aus den Klammern) dahinter.
+function ingredientLabel(ing) {
+  const { name, note } = ingredientParts(ing);
+  return `${esc(name)}${note ? ` <small class="ing-note">${esc(note)}</small>` : ''}`;
 }
 
 // Verkleinert Fotos vor dem Hochladen, damit der kostenlose Speicher lange reicht.
@@ -376,7 +429,7 @@ async function renderPantry() {
   app.innerHTML = '<p class="loading">Lade Rezepte …</p>';
   const { all, sharedBooks } = await searchableRecipes();
   const state = loadPantry();
-  const known = [...new Set(all.flatMap((r) => r.ingredients.map((i) => i.name.split(',')[0].trim())).filter(Boolean))]
+  const known = [...new Set(all.flatMap((r) => r.ingredients.map((i) => ingredientParts(i).name.split(',')[0].trim())).filter(Boolean))]
     .sort(collator.compare);
 
   app.innerHTML = `
@@ -776,7 +829,7 @@ function showRecipe(r, { own, back, backLabel, from = '' }) {
     if (!ingList) return;
     $('#srv').textContent = `${servings} ${servings === 1 ? 'Person' : 'Personen'}`;
     const factor = servings / r.servings;
-    ingList.innerHTML = r.ingredients.map((i) => `<li><span class="qty">${esc(formatQuantity(i, factor))}</span><span>${esc(i.name)}</span></li>`).join('');
+    ingList.innerHTML = r.ingredients.map((i) => `<li><span class="qty">${esc(formatQuantity(i, factor))}</span><span>${ingredientLabel(i)}</span></li>`).join('');
   };
   app.querySelectorAll('.stepper button').forEach((b) => {
     b.onclick = () => {
@@ -871,7 +924,8 @@ async function deleteRecipe(r) {
 }
 
 async function renderEditor(id) {
-  const existing = id ? (await loadRecipes()).find((x) => x.id === id) : null;
+  const [own] = await Promise.all([loadRecipes(), loadCategories()]);
+  const existing = id ? own.find((x) => x.id === id) : null;
   if (id && !existing) { location.hash = '#/'; return; }
   window.scrollTo(0, 0);
   const r = existing || {
@@ -946,7 +1000,12 @@ async function renderEditor(id) {
   const preview = $('#preview');
   const drawPreview = () => {
     const items = parseIngredientText(form.ingredients.value);
-    preview.innerHTML = items.map((i) => `<li><span class="qty">${esc(formatQuantity(i)) || '–'}</span><span>${esc(i.name)}</span></li>`).join('');
+    // Je Zutat die Kategorie; eine Änderung gilt für diese Zutat in allen Rezepten und Einkaufslisten.
+    preview.innerHTML = items.map((i, n) => `<li><span class="qty">${esc(formatQuantity(i)) || '–'}</span><span>${ingredientLabel(i)}</span>
+      ${i.name ? `<select class="cat-select" data-cat="${n}" aria-label="Kategorie von ${esc(i.name)}">${categoryOptions(categoryOf(i.name))}</select>` : ''}</li>`).join('');
+    preview.querySelectorAll('[data-cat]').forEach((sel) => {
+      sel.onchange = () => setCategory(items[Number(sel.dataset.cat)].name, sel.value);
+    });
   };
   form.ingredients.oninput = drawPreview;
   drawPreview();
@@ -1067,6 +1126,7 @@ async function renderEditor(id) {
       };
       const { data, error } = await supabase.from('recipes').upsert(row).select().single();
       if (error) throw error;
+      await rememberCategories(row.ingredients.map((i) => i.name));
 
       const removed = existing ? existing.images.filter((p) => !keptImages.includes(p)) : [];
       if (removed.length) await supabase.storage.from(IMAGE_BUCKET).remove(removed);
@@ -1306,6 +1366,7 @@ async function addPlanToList(entries) {
     if (!list) return false;
     const items = await loadItems(list.id);
     const additions = additionsFromPlan(entries);
+    await rememberCategories(additions.map((a) => a.name));
     const conflicts = additions.filter((a) => findConflict(a, items)).length;
     let asked = 0;
     let fixed = null;
@@ -1346,7 +1407,7 @@ async function addPlanToList(entries) {
 
 async function renderShopping(listId) {
   app.innerHTML = '<p class="loading">Lade Einkaufsliste …</p>';
-  const lists = await loadLists();
+  const [lists] = await Promise.all([loadLists(), loadCategories()]);
   const me = session.user.id;
   const list = lists.find((l) => l.id === listId)
     ?? lists.find((l) => l.id === rememberedList())
@@ -1368,7 +1429,7 @@ async function renderShopping(listId) {
       </select>
       <button class="btn small" id="manage" aria-expanded="false" aria-controls="list-settings">Verwalten</button>
       <select id="item-sort" aria-label="Sortierung">
-        ${[['added', 'Hinzugefügt'], ['name', 'A–Z'], ['recipe', 'Nach Rezept']].map(([v, l]) => `<option value="${v}"${shoppingSort() === v ? ' selected' : ''}>${l}</option>`).join('')}
+        ${[['added', 'Hinzugefügt'], ['name', 'A–Z'], ['category', 'Nach Kategorie'], ['recipe', 'Nach Rezept']].map(([v, l]) => `<option value="${v}"${shoppingSort() === v ? ' selected' : ''}>${l}</option>`).join('')}
       </select>
     </div>
     <section class="card-panel share-section list-settings" id="list-settings" hidden>
@@ -1403,9 +1464,9 @@ async function renderShopping(listId) {
     const sorted = sortItems(items, sort);
     const open = sorted.filter((i) => !i.checked);
     const done = sorted.filter((i) => i.checked);
-    // Abhaken nur über die Checkbox; nach rechts wischen zeigt „Menge ändern“.
+    // Abhaken nur über die Checkbox; nach rechts wischen zeigt „Ändern“ (Menge und Kategorie).
     const row = (i) => `<li class="swipe${i.checked ? ' done' : ''}" data-item="${i.id}">
-      <div class="swipe-actions start"><button type="button" class="swipe-btn accent" data-amount="${i.id}">Menge ändern</button></div>
+      <div class="swipe-actions start"><button type="button" class="swipe-btn accent" data-amount="${i.id}">Ändern</button></div>
       <div class="shop-row">
         <div class="shop-check"><input type="checkbox" data-check="${i.id}" ${i.checked ? 'checked' : ''} aria-label="${esc(i.name)} abhaken">
           <span><span class="qty">${esc(formatItemQuantity(i))}</span> ${esc(i.name)}
@@ -1414,8 +1475,9 @@ async function renderShopping(listId) {
       </div></li>`;
     // Nach Rezept: Zwischenüberschriften, sobald ein neues Rezept beginnt.
     const rows = (list) => list.map((item, i) => {
-      const group = groupOf(item);
-      const head = sort === 'recipe' && (i === 0 || groupOf(list[i - 1]) !== group) ? `<li class="group-head">${esc(group)}</li>` : '';
+      const groupBy = sort === 'category' ? (x) => categoryOf(x.name) : groupOf;
+      const group = groupBy(item);
+      const head = (sort === 'recipe' || sort === 'category') && (i === 0 || groupBy(list[i - 1]) !== group) ? `<li class="group-head">${esc(group)}</li>` : '';
       return head + row(item);
     }).join('');
     $('#open-items').innerHTML = open.length ? rows(open)
@@ -1432,13 +1494,17 @@ async function renderShopping(listId) {
       b.onclick = async () => {
         closeSwipes();
         const item = items.find((i) => i.id === b.dataset.amount);
-        const { value, form } = await openSheet(`<h2>Menge für ${esc(item.name)}</h2>
+        const category = categoryOf(item.name);
+        const { value, form } = await openSheet(`<h2>${esc(item.name)}</h2>
           <label>Menge <input name="qty" value="${esc(formatItemQuantity(item))}" placeholder="z. B. 500 g oder 3" autocomplete="off" enterkeyhint="done"></label>
           <p class="hint">Leer lassen für „ohne Menge“.</p>
+          <label>Kategorie <select name="category">${categoryOptions(category)}</select></label>
           <div class="row"><button class="btn primary" value="ok">Speichern</button>
             <button class="btn ghost" value="cancel" formnovalidate>Abbrechen</button></div>`);
         if (value !== 'ok') return;
+        if (form.category.value !== category) { await setCategory(item.name, form.category.value); draw(); }
         const text = form.qty.value.trim();
+        if (text === formatItemQuantity(item)) return;
         const parsed = text ? parseIngredientLine(`${text} ${item.name}`) : { amount: null, unit: null };
         if (text && parsed.amount == null) { toast('Die Menge wurde nicht erkannt, z. B. „500 g“ oder „3“.'); return; }
         // Von Hand geänderte Mengen bleiben stehen, wenn das Rezept später von der Liste genommen wird.
@@ -1531,6 +1597,7 @@ async function renderShopping(listId) {
     }).select().single();
     if (error) { toast(error.message); input.value = text; return; }
     if (!items.some((i) => i.id === data.id)) items.push(data);
+    rememberCategories([data.name]);
     draw();
     input.focus();
   };
@@ -1615,6 +1682,9 @@ const groupOf = (item) => item.sources?.[0]?.title ?? 'Von Hand';
 function sortItems(items, sort) {
   const list = [...items];
   if (sort === 'name') list.sort((a, b) => collator.compare(a.name, b.name));
+  if (sort === 'category') {
+    list.sort((a, b) => categoryRank(categoryOf(a.name)) - categoryRank(categoryOf(b.name)) || collator.compare(a.name, b.name));
+  }
   if (sort === 'recipe') {
     list.sort((a, b) => (!a.sources?.length - !b.sources?.length)
       || collator.compare(groupOf(a), groupOf(b)) || collator.compare(a.name, b.name));
@@ -1689,6 +1759,8 @@ async function copyRecipe(r, button) {
     };
     const { data, error } = await supabase.from('recipes').insert(row).select().single();
     if (error) throw error;
+    // Eigene Kategorien gelten automatisch; neue Zutaten bekommen einen Vorschlag.
+    await rememberCategories(r.ingredients.map((i) => i.name));
     if (recipes) recipes = [...recipes, data].sort((a, b) => collator.compare(a.title, b.title));
     toast('In dein Kochbuch übernommen');
     location.hash = `#/r/${data.id}`;
@@ -1976,7 +2048,7 @@ if (isConfigured) {
     const userChanged = newSession?.user?.id !== session?.user?.id;
     session = newSession;
     if (event === 'PASSWORD_RECOVERY') recoveringPassword = true;
-    if (userChanged) { recipes = null; myName = undefined; cookbookCache.clear(); }
+    if (userChanged) { recipes = null; myName = undefined; categories = null; cookbookCache.clear(); }
     // Nur bei echten Wechseln neu zeichnen, nicht beim stillen Token-Refresh.
     if (userChanged || event === 'PASSWORD_RECOVERY' || event === 'SIGNED_OUT') setTimeout(render);
   });

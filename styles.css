@@ -153,7 +153,10 @@ span.chip { cursor: default; background: var(--surface-2); }
 }
 .qty { font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
 .parse-preview { margin-top: -6px; font-size: 0.9rem; color: var(--muted); }
-.parse-preview li { padding: 4px 0; }
+.parse-preview li { padding: 4px 0; grid-template-columns: 6.5rem 1fr auto; align-items: center; }
+.cat-select { max-width: 9.5rem; padding: 2px 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--muted); font: inherit; font-size: 0.8rem; }
+.ing-note { color: var(--muted); font-size: 0.85em; }
+.ing-note::before { content: '· '; }
 .parse-preview:empty { display: none; }
 
 .steps { padding-left: 1.4rem; }

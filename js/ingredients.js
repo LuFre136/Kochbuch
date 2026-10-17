@@ -1,5 +1,6 @@
 // Zutaten parsen, umrechnen und formatieren.
-// Eine Zutat ist { amount, amountMax, unit, name }; amount/amountMax sind Zahlen oder null.
+// Eine Zutat ist { amount, amountMax, unit, name, note? }; amount/amountMax sind Zahlen oder null.
+// note ist eine Anmerkung, die im Rezept in Klammern stand: "200 g Mehl (Type 405)".
 
 const FRACTIONS = { '½': 1 / 2, '⅓': 1 / 3, '⅔': 2 / 3, '¼': 1 / 4, '¾': 3 / 4, '⅕': 1 / 5, '⅛': 1 / 8 };
 const FRACTION_CHARS = Object.keys(FRACTIONS).join('');
@@ -31,7 +32,34 @@ export function parseNumber(str) {
   return null;
 }
 
+// Trennt Anmerkungen in Klammern vom Namen. Plural-Klammern direkt am Wort wie "Ei(er)"
+// oder "Zwiebel(n)" fallen weg, es bleibt die Einzahl.
+export function splitNote(raw) {
+  const notes = [];
+  const name = String(raw ?? '')
+    .replace(/(\p{L})\((?:e|n|en|er|ern|s|nen|se)\)/gu, '$1')
+    .replace(/\(([^()]*)\)/g, (_, inner) => { if (inner.trim()) notes.push(inner.trim()); return ' '; })
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([,.;])/g, '$1')
+    .replace(/^[\s,;]+|[\s,;]+$/g, '');
+  return { name, note: notes.join('; ') };
+}
+
+// Name ohne Klammerzusatz und die Anmerkung; auch für ältere Rezepte, die die Klammern noch im Namen haben.
+export function ingredientParts(ing) {
+  if (ing.note != null) return { name: ing.name ?? '', note: ing.note };
+  return splitNote(ing.name);
+}
+
 export function parseIngredientLine(line) {
+  const parsed = parseQuantity(line);
+  if (!parsed) return null;
+  const { name, note } = splitNote(parsed.name);
+  if (!name && parsed.amount == null) return null;
+  return note ? { ...parsed, name, note } : { ...parsed, name };
+}
+
+function parseQuantity(line) {
   const text = String(line).trim();
   if (!text) return null;
   const m = text.match(LINE_RE);
@@ -102,6 +130,8 @@ export function ingredientToLine(ing) {
     parts.push(q);
   }
   if (ing.unit) parts.push(ing.unit);
-  if (ing.name) parts.push(ing.name);
+  const { name, note } = ingredientParts(ing);
+  if (name) parts.push(name);
+  if (note) parts.push(`(${note})`);
   return parts.join(' ');
 }

@@ -2,7 +2,7 @@
 // und wieder herausnehmen. Ein Eintrag ist { name, amount, unit, manual, checked, sources },
 // sources = [{ recipe_id, plan_id, title, amount }] mit amount in der Einheit des Eintrags.
 import { nameWords, isAvailable, STAPLES } from './pantry.js';
-import { formatAmount } from './ingredients.js';
+import { formatAmount, ingredientParts } from './ingredients.js';
 
 // Einheiten, die sich ineinander umrechnen lassen, haben dieselbe Klasse.
 const CONVERTIBLE = {
@@ -69,7 +69,7 @@ export function additionsFromPlan(entries) {
       const base = ing.amountMax ?? ing.amount; // Bei "2–3" lieber genug kaufen.
       const amount = base == null ? null : round(base * factor);
       const addition = {
-        name: itemName(ing.name),
+        name: itemName(ingredientParts(ing).name), // ohne Anmerkung aus den Klammern
         amount,
         unit: ing.unit ?? '',
         sources: [{ recipe_id: recipe.id, plan_id, title: recipe.title, amount }],
