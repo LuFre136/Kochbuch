@@ -18,6 +18,7 @@ import {
   pairOf, alternativeIds, alternativeGroup, suggestAlternatives, relatedAlternatives,
   filterByTags, tagMatches,
 } from './alternatives.js';
+import { SORTS, sortRecipes, formatCooked, cookedFromPlan } from './sorting.js';
 import {
   ingredientsFromStep, remainingIngredients, ingredientKey, mentionsIngredient,
   scaleIngredient, combinedTitle, stepsForCombine, combinedImages,
@@ -38,6 +39,7 @@ let placesSaved = true; // false, solange ingredient_categories keine Spalte pla
 let myName; // Benutzername: undefined = noch nicht geladen, null = fehlt noch, false = benutzername.sql nicht eingerichtet
 let links = null; // Alternativ-Verknüpfungen [{ recipe_a, recipe_b }]; null = noch nicht geladen
 let linksTable = true; // false, solange alternativen.sql nicht ausgeführt wurde
+let cookedColumn = true; // false, solange gekocht.sql nicht ausgeführt wurde
 let pendingNew = null; // Vorbelegung für ein neues Rezept, z. B. aus dem Kombinieren
 let activeTag = null;
 let listSort = 'name';
@@ -90,6 +92,9 @@ async function loadRecipes(force = false) {
   if (recipes && !force) return recipes;
   const { data, error } = await supabase.from('recipes').select('*').eq('owner_id', session.user.id);
   if (error) throw error;
+  // Die Spalte last_cooked gibt es erst nach gekocht.sql; ohne sie entfällt die
+  // Sortierung "Zuletzt gekocht".
+  if (data.length) cookedColumn = 'last_cooked' in data[0];
   recipes = data.sort((a, b) => collator.compare(a.title, b.title));
   return recipes;
 }
@@ -720,8 +725,7 @@ async function renderList() {
     <div class="search">
       <input type="search" id="q" placeholder="Titel, Beschreibung oder Tag suchen" value="${esc(listQuery)}" aria-label="Rezepte durchsuchen">
       <select id="sort" aria-label="Sortierung">
-        <option value="name"${listSort === 'name' ? ' selected' : ''}>A–Z</option>
-        <option value="rating"${listSort === 'rating' ? ' selected' : ''}>Beste zuerst</option>
+        ${SORTS.filter(([key]) => key !== 'cooked' || cookedColumn).map(([key, label]) => `<option value="${key}"${listSort === key ? ' selected' : ''}>${label}</option>`).join('')}
       </select>
     </div>
     ${tags.length ? `<div class="chips">${tags.map((t) => `<button class="chip${t === activeTag ? ' active' : ''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}</div>` : ''}
@@ -731,9 +735,9 @@ async function renderList() {
   const results = $('#results');
   const draw = () => {
     const q = listQuery.trim().toLowerCase();
-    const shown = all.filter((r) => (!activeTag || r.tags.includes(activeTag))
+    const found = all.filter((r) => (!activeTag || r.tags.includes(activeTag))
       && (!q || [r.title, r.description, ...r.tags].some((s) => s.toLowerCase().includes(q))));
-    if (listSort === 'rating') shown.sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0) || collator.compare(a.title, b.title));
+    const shown = sortRecipes(found, listSort, collator.compare);
     results.innerHTML = shown.length ? shown.map((r) => `<div class="swipe" data-id="${r.id}">
         <div class="swipe-actions start"><button type="button" class="swipe-btn danger" data-act="delete">Löschen</button></div>
         <div class="swipe-actions end"><button type="button" class="swipe-btn" data-act="plan">Einplanen</button><button type="button" class="swipe-btn accent" data-act="share">Teilen</button></div>
@@ -908,7 +912,8 @@ function recipeCard(r, href = `#/r/${r.id}`, byId = null) {
   const img = r.images[0]
     ? `<img src="${esc(imageUrl(r.images[0]))}" alt="" loading="lazy">`
     : '<div class="placeholder" aria-hidden="true">🍲</div>';
-  const meta = [r.rating ? '★'.repeat(r.rating) : '', r.total_minutes != null ? `⏱ ${formatMinutes(r.total_minutes)}` : '', ...r.tags.slice(0, 3)]
+  const cooked = r.last_cooked ? `🍽 gekocht ${formatCooked(r.last_cooked, today())}` : '';
+  const meta = [r.rating ? '★'.repeat(r.rating) : '', r.total_minutes != null ? `⏱ ${formatMinutes(r.total_minutes)}` : '', cooked, ...r.tags.slice(0, 2)]
     .filter(Boolean).map((m) => `<span>${esc(m)}</span>`).join('');
   return `<a class="card${altStack(r)}" href="${href}">
     ${img}
@@ -986,9 +991,10 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
     : r.rating ? `<div class="stars readonly" aria-label="${r.rating} von 5 Sternen">${'★'.repeat(r.rating)}${'☆'.repeat(5 - r.rating)}</div>` : ''}
           ${r.description ? `<p class="lead">${esc(r.description)}</p>` : ''}
           ${r.tags.length ? `<div class="chips static">${r.tags.map((t) => `<span class="chip">${esc(t)}</span>`).join('')}</div>` : ''}
-          ${r.total_minutes != null || r.cook_minutes != null ? `<dl class="times">
+          ${r.total_minutes != null || r.cook_minutes != null || r.last_cooked ? `<dl class="times">
             ${r.total_minutes != null ? `<div><dt>Gesamtzeit</dt><dd>${formatMinutes(r.total_minutes)}</dd></div>` : ''}
             ${r.cook_minutes != null ? `<div><dt>Koch-/Backzeit</dt><dd>${formatMinutes(r.cook_minutes)}</dd></div>` : ''}
+            ${r.last_cooked ? `<div><dt>Zuletzt gekocht</dt><dd>${esc(formatCooked(r.last_cooked, today()))}</dd></div>` : ''}
           </dl>` : ''}
           ${group.length > 1 ? `<p class="stack-at">${index === 0 ? 'Hauptrezept' : `Alternative ${index} von ${group.length - 1}`}
             · ${group.length - 1 === 1 ? 'eine Alternative' : `${group.length - 1} Alternativen`} · wischen oder auf den Rand tippen</p>` : ''}
@@ -2135,8 +2141,28 @@ function formatDay(iso) {
   return d.toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'long' });
 }
 
+// Ein eingeplanter Tag, der vorbei ist, gilt als gekocht: bevor die alten Einträge aus
+// dem Plan fallen, wird ihr Datum als "zuletzt gekocht" am Rezept vermerkt — nur, wenn es
+// neuer ist als das, was dort steht.
+async function markCooked() {
+  if (!cookedColumn) return;
+  const { data } = await supabase.from('meal_plan').select('recipe_id, planned_for')
+    .eq('owner_id', session.user.id).lt('planned_for', today());
+  const latest = cookedFromPlan(data);
+  if (!latest.size) return;
+  const own = await loadRecipes();
+  for (const [id, day] of latest) {
+    const r = own.find((x) => x.id === id);
+    if (!r || (r.last_cooked && r.last_cooked >= day)) continue;
+    const { error } = await supabase.from('recipes').update({ last_cooked: day }).eq('id', id);
+    if (error) { cookedColumn = false; return; } // Spalte gibt es erst nach gekocht.sql
+    r.last_cooked = day;
+  }
+}
+
 // Kommende Einträge; vergangene werden dabei aufgeräumt.
 async function loadPlan() {
+  await markCooked();
   await supabase.from('meal_plan').delete().eq('owner_id', session.user.id).lt('planned_for', today());
   const { data, error } = await supabase.from('meal_plan').select('*')
     .eq('owner_id', session.user.id).gte('planned_for', today()).order('planned_for');
