@@ -67,7 +67,7 @@ main { max-width: 860px; margin: 0 auto; padding: 16px; }
 }
 .btn.small { min-height: 36px; padding: 0 12px; font-size: 0.9rem; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-.btn.ghost { background: transparent; }
+.btn.ghost { background: transparent; border-style: dashed; color: var(--muted); }
 .btn.danger { color: var(--danger); }
 .btn:disabled { opacity: 0.6; cursor: default; }
 .link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; cursor: pointer; justify-self: start; }
@@ -172,9 +172,6 @@ span.chip { cursor: default; background: var(--surface-2); }
 .combine-step small { color: var(--muted); }
 ul.hint { margin: 8px 0 0; padding-left: 1.2rem; }
 
-.alt-hits { max-height: 50vh; overflow-y: auto; }
-.alt-hit { display: grid; gap: 2px; justify-items: start; }
-.alt-hit .btn { text-align: left; }
 .step-videos { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
 .step-videos:empty { display: none; }
 #alt-suggest { margin-top: 10px; }
@@ -378,11 +375,42 @@ main { padding-bottom: calc(88px + env(safe-area-inset-bottom)); }
 /* Dialog von unten */
 dialog.sheet {
   border: 0; padding: 0; border-radius: 18px; width: min(100% - 32px, 440px);
+  max-height: min(85vh, 85dvh); overflow: auto; overscroll-behavior: contain;
   background: var(--surface); color: var(--text); box-shadow: 0 10px 40px rgb(0 0 0 / 0.25);
 }
 dialog.sheet::backdrop { background: rgb(0 0 0 / 0.35); }
 .sheet-form { display: grid; gap: 14px; padding: 20px; }
 .sheet-form h2 { margin: 0; }
+/* Solange ein Dialog offen ist, bewegt sich die Seite dahinter nicht. */
+html.sheet-open, html.sheet-open body { overflow: hidden; }
+
+/* Auswahlseite: füllt den Bildschirm, Zurück-Pfeil oben links, Liste scrollt allein */
+dialog.sheet.full {
+  width: 100%; max-width: none; height: 100%; max-height: none; border-radius: 0; overflow: hidden;
+}
+.picker { display: grid; grid-template-rows: auto auto 1fr auto; gap: 12px; height: 100%; padding: 12px 16px 16px; }
+.picker-head { display: flex; align-items: center; gap: 8px; }
+.picker-head h2 { margin: 0; font-size: 1.1rem; }
+.picker > input[hidden] { display: none; }
+.pick-list { overflow-y: auto; overscroll-behavior: contain; display: grid; gap: 8px; align-content: start; }
+.pick-item { display: grid; gap: 6px; }
+.pick-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%;
+  min-height: 48px; padding: 8px 14px; text-align: left; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text); font: inherit;
+}
+.pick-row small { display: block; color: var(--muted); font-size: 0.8rem; }
+.pick-row .pick-mark { flex: none; color: var(--muted); font-size: 1.1rem; }
+.pick-row.on { border-color: var(--accent); }
+.pick-row.on .pick-mark { color: var(--accent); }
+.pick-ask {
+  display: grid; gap: 8px; padding: 10px 14px; margin-left: 14px;
+  background: var(--surface-2); border: 1px dashed var(--border); border-radius: var(--radius);
+}
+.pick-ask p { margin: 0; font-size: 0.9rem; }
+.picker-foot { display: grid; gap: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
+.picker-foot .btn { justify-self: end; }
 
 /* Plan */
 .plan-day h2 { margin: 20px 0 10px; }

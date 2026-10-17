@@ -47,3 +47,18 @@ export function suggestAlternatives(recipe, candidates, links, { limit = 5, comp
     .slice(0, limit)
     .map((s) => s.recipe);
 }
+
+// Alternativen der schon verknüpften Rezepte, also die Gruppe einen Schritt weiter.
+// Liefert { id, via } je Rezept: via = das verknüpfte Rezept, über das es gefunden wurde.
+// Das Rezept selbst und schon Verknüpftes bleiben weg, jedes Rezept kommt einmal.
+export function relatedAlternatives(links, selfId, linked) {
+  const have = new Set([selfId, ...linked]);
+  const out = [];
+  for (const id of linked) {
+    for (const other of alternativeIds(links, id)) {
+      if (have.has(other) || out.some((x) => x.id === other)) continue;
+      out.push({ id: other, via: id });
+    }
+  }
+  return out;
+}
