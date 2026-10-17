@@ -399,11 +399,17 @@ html.sheet-open, html.sheet-open body { overflow: hidden; }
 dialog.sheet.full {
   width: 100%; max-width: none; height: 100%; max-height: none; border-radius: 0; overflow: hidden;
 }
-.picker { display: grid; grid-template-rows: auto auto 1fr auto; gap: 12px; height: 100%; padding: 12px 16px 16px; }
+/* Die Auswahlseite hat je nach Reiter verschieden viele Teile (Leiste, Tag-Filter,
+   Suchfeld, Liste, Fuß). Deshalb untereinander statt mit festen Zeilen: nur die Liste
+   wächst, leere Teile fallen ganz weg. */
+.picker { display: flex; flex-direction: column; gap: 12px; height: 100%; padding: 12px 16px 16px; }
+.picker > div:empty { display: none; }
+.picker .chips { margin-bottom: 0; }
+.picker-foot { flex: none; }
 .picker-head { display: flex; align-items: center; gap: 8px; }
 .picker-head h2 { margin: 0; font-size: 1.1rem; }
 .picker > input[hidden] { display: none; }
-.pick-list { overflow-y: auto; overscroll-behavior: contain; display: grid; gap: 8px; align-content: start; }
+.pick-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; gap: 8px; align-content: start; }
 .pick-item { display: grid; gap: 6px; }
 .pick-row {
   display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%;
@@ -421,7 +427,7 @@ dialog.sheet.full {
   font-size: 0.75rem; color: var(--muted);
 }
 .pick-tag.match { border-color: var(--accent); color: var(--accent); font-weight: 600; }
-.pick-tags { align-items: center; margin-bottom: 12px; }
+.pick-tags { align-items: center; }
 .pick-tags .hint { flex: none; }
 .chip.small { padding: 4px 10px; font-size: 0.8rem; }
 .chip:disabled { opacity: 0.45; cursor: default; }

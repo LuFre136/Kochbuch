@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseVideoUrl, videoOf, videosOf, videoKey, embedUrl, stepText, stepTime, stepVideo,
-  stepVideoKey, dropMissingTimes, makeStep, formatTime, playerState,
+  stepVideoKey, dropMissingTimes, makeStep, formatTime, isPlayerMessage,
 } from '../js/video.js';
 import * as fn from '../supabase/functions/import-recipe/index.ts';
 
@@ -157,15 +157,13 @@ test('stepVideoKey nimmt ohne Angabe das erste Video des Rezepts', () => {
   assert.equal(stepVideoKey({ text: 'x', t: 5 }, []), null);
 });
 
-test('playerState liest den Zustand aus Player-Nachrichten', () => {
+test('isPlayerMessage erkennt Nachrichten des Players', () => {
   // YouTube schickt JSON-Strings, TikTok Objekte.
-  assert.equal(playerState(JSON.stringify({ event: 'onStateChange', info: 1 })), 'playing');
-  assert.equal(playerState(JSON.stringify({ event: 'infoDelivery', info: { playerState: 2 } })), 'stopped');
-  assert.equal(playerState(JSON.stringify({ event: 'onStateChange', info: -1 })), 'stopped');
-  assert.equal(playerState({ type: 'onStateChange', value: 1, 'x-tiktok-player': true }), 'playing');
-  assert.equal(playerState({ type: 'onStateChange', value: 2 }), 'stopped');
-  // Nachrichten ohne Zustand sagen nichts.
-  assert.equal(playerState('nicht json'), null);
-  assert.equal(playerState({ event: 'onReady' }), null);
-  assert.equal(playerState(null), null);
+  assert.equal(isPlayerMessage(JSON.stringify({ event: 'onStateChange', info: 1 })), true);
+  assert.equal(isPlayerMessage(JSON.stringify({ event: 'onReady' })), true);
+  assert.equal(isPlayerMessage({ type: 'onStateChange', value: 1, 'x-tiktok-player': true }), true);
+  // Alles andere zählt nicht: fremde Fenster schicken auch Nachrichten.
+  assert.equal(isPlayerMessage('nicht json'), false);
+  assert.equal(isPlayerMessage({ hallo: 1 }), false);
+  assert.equal(isPlayerMessage(null), false);
 });
