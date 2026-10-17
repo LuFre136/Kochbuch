@@ -6,7 +6,7 @@ Rezept-App für iPhone und Browser. Läuft komplett kostenlos auf GitHub Pages (
 
 1. **Datenbank anlegen:** Im Supabase-Dashboard links **SQL Editor** öffnen, den Inhalt von [`supabase/schema.sql`](supabase/schema.sql) einfügen und auf **Run** klicken.
    Danach ebenso den Inhalt von [`supabase/teilen.sql`](supabase/teilen.sql) ausführen (Teilen von Rezepten und Kochbüchern).
-   Danach [`supabase/planung.sql`](supabase/planung.sql) (Bewertungen und Essensplan) und [`supabase/einkauf.sql`](supabase/einkauf.sql) (Einkaufslisten), [`supabase/benutzername.sql`](supabase/benutzername.sql) (Benutzernamen statt E-Mail-Adressen beim Teilen), [`supabase/kategorien.sql`](supabase/kategorien.sql) (eigene Zutaten-Kategorien) , [`supabase/naehrwerte.sql`](supabase/naehrwerte.sql) (Nährwerte) , [`supabase/orte.sql`](supabase/orte.sql) (Einkaufsorte wie Supermarkt oder Drogeriemarkt) und [`supabase/videos.sql`](supabase/videos.sql) (Speicherordner für den Import aus Videos).
+   Danach [`supabase/planung.sql`](supabase/planung.sql) (Bewertungen und Essensplan) und [`supabase/einkauf.sql`](supabase/einkauf.sql) (Einkaufslisten), [`supabase/benutzername.sql`](supabase/benutzername.sql) (Benutzernamen statt E-Mail-Adressen beim Teilen), [`supabase/kategorien.sql`](supabase/kategorien.sql) (eigene Zutaten-Kategorien) , [`supabase/naehrwerte.sql`](supabase/naehrwerte.sql) (Nährwerte) , [`supabase/orte.sql`](supabase/orte.sql) (Einkaufsorte wie Supermarkt oder Drogeriemarkt) und [`supabase/videos.sql`](supabase/videos.sql) (Speicherordner für den Import aus Videos) und [`supabase/alternativen.sql`](supabase/alternativen.sql) (Alternativrezepte).
 2. **Login-Weiterleitung:** Unter **Authentication → URL Configuration** als **Site URL** `https://lufre136.github.io/Kochbuch/` eintragen und dieselbe Adresse bei **Redirect URLs** hinzufügen. Sonst führen Bestätigungs-Mails ins Leere.
 3. **Veröffentlichen:** Im GitHub-Repository unter **Settings → Pages** bei *Source* „Deploy from a branch“, Branch `main`, Ordner `/ (root)` wählen. Nach ein bis zwei Minuten ist die App unter `https://lufre136.github.io/Kochbuch/` erreichbar.
 4. **Import per Link einrichten:** Im Supabase-Dashboard **Edge Functions → Deploy a new function → Via Editor** wählen, als Namen `import-recipe` eintragen, den Inhalt von [`supabase/functions/import-recipe/index.ts`](supabase/functions/import-recipe/index.ts) einfügen und auf **Deploy function** klicken. Danach in den Einstellungen der Funktion **Verify JWT** ausschalten (die Funktion prüft die Anmeldung selbst).
@@ -30,6 +30,12 @@ Schritte sind entweder Text oder `{ text, t }` mit `t` = Sekunden im Video. Steh
 Zutaten werden als eine Zeile pro Zutat eingegeben („200 g Mehl“, „½ Bund Petersilie“, „2-3 Zehen Knoblauch“) und als `{ amount, amountMax, unit, name }` gespeichert. So kann die App sie auf eine andere Personenzahl umrechnen. Eine Anmerkung in Klammern („200 g Mehl (Type 405)“) wird als `note` gespeichert und kommt nicht mit auf die Einkaufsliste; Plural-Klammern wie „Ei(er)“ fallen weg.
 
 Jede Zutat hat eine Kategorie (Obst, Gemüse, Fleisch & Wurst …). Kommt eine Zutat zum ersten Mal vor, schlägt [`js/categories.js`](js/categories.js) anhand des Namens eine vor; ändern lässt sie sich in der Vorschau unter dem Zutatenfeld oder auf der Einkaufsliste (nach rechts wischen). Die Zuordnungen gelten pro Nutzer, auch für übernommene Rezepte.
+
+## Alternativrezepte
+
+Zu einem Rezept lassen sich andere Rezepte als Alternative hinterlegen (im Rezept auf „Bearbeiten“, Abschnitt *Alternativen*). Eine Verknüpfung gilt immer in beide Richtungen: hängt B als Alternative an A, erscheint A auch bei B. „+ Alternative“ sucht über Titel und Tags; hat ein gefundenes Rezept selbst Alternativen, lassen sich mit einem Tipp alle übernehmen. Darunter schlägt die App Rezepte mit gemeinsamen Tags vor.
+
+In der Rezeptansicht ist das aufgerufene Rezept das Hauptrezept; mit Wischen nach links oder rechts (oder über die Pfeile) wechselt man zu den Alternativen. Die Punkte unter dem Titel zeigen, wo man ist.
 
 ## Teilen
 
