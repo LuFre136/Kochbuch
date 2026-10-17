@@ -25,7 +25,7 @@ npm start   # lokaler Server auf http://localhost:8080
 npm test    # Tests für Zutaten-Parser, Portionsrechner, Rezept-Import, Zutatensuche, Einkaufslisten und Saisonkalender
 ```
 
-Schritte sind entweder Text oder `{ text, t }` mit `t` = Sekunden im Video. Steht unter den Quellen ein Video-Link von YouTube oder TikTok, bettet die Rezeptansicht das Video ein, und ein Tipp auf den Zeitstempel eines Schritts springt im Video an diese Stelle.
+Schritte sind entweder Text oder `{ text, t, v }` mit `t` = Sekunden im Video und `v` = Kennung des Videos (z. B. `youtube:dQw4w9WgXcQ`). Jeder Video-Link von YouTube oder TikTok unter den Quellen ist ein Video des Rezepts; stehen dort mehrere, schaltet eine Leiste über dem Player zwischen ihnen um, und am Zeitstempel steht die Nummer des Videos. Ein Tipp darauf wechselt zum passenden Video und springt an die Stelle. Alte Schritte ohne `v` gehören zum ersten Video. Wird ein Video-Link aus den Quellen gelöscht, verlieren seine Schritte beim Speichern den Zeitstempel.
 
 Zutaten werden als eine Zeile pro Zutat eingegeben („200 g Mehl“, „½ Bund Petersilie“, „2-3 Zehen Knoblauch“) und als `{ amount, amountMax, unit, name }` gespeichert. So kann die App sie auf eine andere Personenzahl umrechnen. Eine Anmerkung in Klammern („200 g Mehl (Type 405)“) wird als `note` gespeichert und kommt nicht mit auf die Einkaufsliste; Plural-Klammern wie „Ei(er)“ fallen weg.
 
