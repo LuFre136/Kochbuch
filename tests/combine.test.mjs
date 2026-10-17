@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   mentionsIngredient, ingredientKey, scaleIngredient, ingredientsFromStep,
-  remainingIngredients, combinedTitle,
+  remainingIngredients, combinedTitle, stepsForCombine, combinedImages,
 } from '../js/combine.js';
 import { parseIngredientText } from '../js/ingredients.js';
 
@@ -51,4 +51,30 @@ test('listet die restlichen Zutaten eines Rezepts zum Nachtragen', () => {
 test('setzt den Titel aus den Rezepten zusammen', () => {
   assert.equal(combinedTitle(['Lasagne', 'Salat']), 'Lasagne + Salat');
   assert.equal(combinedTitle(['Lasagne', '']), 'Lasagne');
+});
+
+test('jeder Zeitstempel behält beim Kombinieren sein eigenes Video', () => {
+  const a = {
+    sources: ['https://www.youtube.com/watch?v=aaaaaaaaaaa'],
+    steps: ['Ohne Zeit', { text: 'Alt, ohne Angabe', t: 30 }],
+  };
+  const b = {
+    sources: ['https://www.tiktok.com/@koch/video/1234567890123'],
+    steps: [{ text: 'Mit Angabe', t: 10, v: 'tiktok:1234567890123' }, { text: 'Ohne Angabe', t: 20 }],
+  };
+  assert.deepEqual(stepsForCombine(a).map((st) => [st.t, st.v]), [[null, null], [30, 'youtube:aaaaaaaaaaa']]);
+  assert.deepEqual(stepsForCombine(b).map((st) => [st.t, st.v]), [[10, 'tiktok:1234567890123'], [20, 'tiktok:1234567890123']]);
+});
+
+test('ohne Video bleibt der Zeitstempel ohne Zuordnung', () => {
+  const r = { sources: ['https://www.chefkoch.de/rezepte/1'], steps: [{ text: 'Schritt', t: 15 }] };
+  assert.deepEqual(stepsForCombine(r), [{ i: 0, text: 'Schritt', t: 15, v: null }]);
+});
+
+test('sammelt die Bilder aller eigenen Rezepte ohne Doppelte', () => {
+  const a = { images: ['a/1.jpg', 'a/2.jpg'] };
+  const b = { images: ['b/1.jpg', 'a/1.jpg'] };
+  const geteilt = { images: ['x/1.jpg'], from: 'Aus dem Kochbuch von Anna' };
+  assert.deepEqual(combinedImages([a, b, geteilt]), ['a/1.jpg', 'a/2.jpg', 'b/1.jpg']);
+  assert.deepEqual(combinedImages([{ }]), []);
 });

@@ -19,7 +19,7 @@ import {
 } from './alternatives.js';
 import {
   ingredientsFromStep, remainingIngredients, ingredientKey, mentionsIngredient,
-  scaleIngredient, combinedTitle,
+  scaleIngredient, combinedTitle, stepsForCombine, combinedImages,
 } from './combine.js';
 
 const app = document.getElementById('app');
@@ -965,7 +965,6 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
       <div class="actions">${own ? `
         <button class="btn primary" id="plan-btn">Einplanen</button>
         <a class="btn" href="#/r/${r.id}/bearbeiten">Bearbeiten</a>
-        <a class="btn" href="#/kombinieren/${r.id}">Kombinieren</a>
         <button class="btn" id="share">Teilen</button>
         ${r.share_token ? '<button class="btn ghost" id="unshare">Teilen beenden</button>' : ''}
         <button class="btn danger" id="del">Löschen</button>` : session
@@ -1161,7 +1160,7 @@ async function renderCombine(mainId) {
 
   const byId = (id) => chosen.find((x) => x.id === id);
   const stepKey = (rid, i) => `${rid}:${i}`;
-  const stepsOf = (r) => r.steps.map((st, i) => ({ i, text: stepText(st), t: stepTime(st), v: (typeof st === 'object' && st?.v) || null }));
+  const stepsOf = stepsForCombine;
   const haveIngredients = () => ings.map((x) => x.ing);
 
   app.innerHTML = `
@@ -1336,7 +1335,7 @@ async function renderCombine(mainId) {
       sources: [...new Set(chosen.flatMap((r) => r.sources))],
       notes: [main.notes, `Kombiniert aus ${chosen.map((r) => r.title).join(' und ')}.`].filter(Boolean).join('\n\n'),
       images: [],
-      imagePaths: main.from ? [] : main.images, // Bilder des Hauptrezepts werden kopiert
+      imagePaths: combinedImages(chosen), // Bilder aller beteiligten Rezepte werden kopiert
       combinedFrom: chosen.filter((r) => !r.from).map((r) => r.id),
     };
     location.hash = '#/neu';
@@ -1496,6 +1495,7 @@ async function renderEditor(id) {
         <legend>Zubereitung</legend>
         <ol class="step-edit" id="steps"></ol>
         <button type="button" class="btn small" id="step-add">+ Schritt hinzufügen</button>
+        <div class="step-videos" id="step-videos"></div>
       </fieldset>
       <label>Notizen <textarea name="notes" rows="3">${esc(r.notes)}</textarea></label>
       <label>Quellen <textarea name="sources" rows="2" placeholder="https://… (ein Link pro Zeile)">${esc(r.sources.join('\n'))}</textarea></label>
@@ -1517,6 +1517,7 @@ async function renderEditor(id) {
 
       <div class="actions">
         <button class="btn primary" id="save">Speichern</button>
+        ${existing ? `<a class="btn" id="combine-link" href="#/kombinieren/${existing.id}">Mit anderem Rezept kombinieren</a>` : ''}
       </div>
     </form>`;
 
@@ -1590,6 +1591,10 @@ async function renderEditor(id) {
     // Zeitstempel-Felder nur, wenn unter Quellen ein Video steht; die Auswahl des Videos
     // erst, wenn es mehrere sind.
     const videos = videosOf(form.sources.value.split('\n'));
+    // Was in der Auswahl steht, gilt auch gespeichert: ohne Angabe ist es das erste Video.
+    // Zeigt die Angabe auf ein Video, das es nicht mehr gibt, bleibt sie stehen; beim
+    // Speichern verliert der Schritt dann seinen Zeitstempel.
+    steps.forEach((st) => { if (st.t != null && !st.v && videos.length) st.v = videos[0].key; });
     stepList.innerHTML = steps.map((st, i) => `<li>
       <div class="step-head"><span>Schritt ${i + 1}</span>
         ${steps.length > 1 ? `<button type="button" class="link danger-link" data-remove="${i}">Entfernen</button>` : ''}</div>
@@ -1616,6 +1621,21 @@ async function renderEditor(id) {
     });
     stepList.querySelectorAll('[data-remove]').forEach((b) => {
       b.onclick = () => { steps.splice(Number(b.dataset.remove), 1); drawSteps(); };
+    });
+    // Nach dem Kombinieren hängen die Zeitstempel oft am falschen Video; damit setzt man
+    // sie alle auf einmal um.
+    const bar = $('#step-videos');
+    const times = steps.filter((st) => st.t != null).length;
+    bar.innerHTML = videos.length > 1 && times
+      ? `<span class="hint">${times === 1 ? 'Zeitstempel' : `Alle ${times} Zeitstempel`} zuordnen:</span>
+         ${videos.map((v, n) => `<button type="button" class="btn small" data-allvideo="${esc(v.key)}">Video ${n + 1}</button>`).join('')}`
+      : '';
+    bar.querySelectorAll('[data-allvideo]').forEach((b) => {
+      b.onclick = () => {
+        steps.forEach((st) => { if (st.t != null) st.v = b.dataset.allvideo; });
+        drawSteps();
+        toast('Zeitstempel zugeordnet. Noch speichern.');
+      };
     });
   };
   // key: Video, zu dem die Zeitstempel importierter Schritte gehören.
@@ -1674,7 +1694,8 @@ async function renderEditor(id) {
     NUTRIENTS.forEach(([k]) => { form[`n_${k}`].value = n[k] ?? ''; });
     $('.nutrition-edit').open = true;
   };
-  // Die Bilder des Hauptrezepts werden kopiert, damit sie auch bleiben, wenn es gelöscht wird.
+  // Die Bilder der Ausgangsrezepte werden kopiert, damit sie auch bleiben, wenn die Rezepte
+  // nach dem Kombinieren gelöscht werden.
   if (combined?.imagePaths?.length) {
     (async () => {
       for (const path of combined.imagePaths) {
@@ -1688,6 +1709,23 @@ async function renderEditor(id) {
       }
       drawThumbs();
     })();
+  }
+
+  // Kombinieren verlässt das Formular; ungespeicherte Änderungen wären sonst still weg.
+  let dirty = false;
+  form.addEventListener('input', () => { dirty = true; });
+  form.addEventListener('change', () => { dirty = true; });
+  const combineLink = $('#combine-link');
+  if (combineLink) {
+    combineLink.onclick = async (e) => {
+      if (!dirty) return;
+      e.preventDefault();
+      const { value } = await openSheet(`<h2>Änderungen verwerfen?</h2>
+        <p>Beim Kombinieren entsteht ein neues Rezept. Was du hier gerade geändert hast, wird nicht gespeichert.</p>
+        <div class="row"><button class="btn primary" value="go">Verwerfen und kombinieren</button>
+          <button class="btn ghost" value="stay" formnovalidate>Hierbleiben</button></div>`);
+      if (value === 'go') location.hash = `#/kombinieren/${existing.id}`;
+    };
   }
 
   if (!existing && !combined) setupImport(form, { setTags, setSteps, addImage: (file) => { newFiles.push({ file, preview: URL.createObjectURL(file) }); drawThumbs(); }, drawPreview, setNutrition });

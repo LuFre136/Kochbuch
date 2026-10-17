@@ -3,6 +3,7 @@
 // Rezepts, die noch fehlt, kommt sie dazu.
 
 import { nameWords } from './pantry.js';
+import { stepText, stepTime, stepVideoKey } from './video.js';
 
 // Vergleicht zwei Wörter so, wie es für Zutaten in einem Schritttext reicht:
 // "Linsen" passt auf "Linsen", "Mehl" auch auf "Weizenmehl".
@@ -49,6 +50,21 @@ export function remainingIngredients(recipe, have, servings) {
   return recipe.ingredients
     .filter((i) => i.name && !known.has(ingredientKey(i)))
     .map((i) => scaleIngredient(i, factor));
+}
+
+// Die Schritte eines Rezepts, wie sie zum Kombinieren gebraucht werden. Jeder Zeitstempel
+// bekommt sein Video ausdrücklich mit, damit er im neuen Rezept nicht auf das Video eines
+// anderen Rezepts rutscht.
+export function stepsForCombine(recipe) {
+  return recipe.steps.map((st, i) => ({
+    i, text: stepText(st), t: stepTime(st), v: stepVideoKey(st, recipe.sources),
+  }));
+}
+
+// Alle Bilder der beteiligten Rezepte, eigene zuerst in der Reihenfolge der Rezepte.
+// Bilder aus geteilten Kochbüchern liegen nicht im eigenen Speicher und bleiben weg.
+export function combinedImages(recipes) {
+  return [...new Set(recipes.filter((r) => !r.from).flatMap((r) => r.images ?? []))];
 }
 
 // Titel des neuen Rezepts: „A + B“.

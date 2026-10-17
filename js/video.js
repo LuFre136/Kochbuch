@@ -93,6 +93,15 @@ export function stepVideo(step, videos) {
   return (key && videos.find((v) => v.key === key)) || (key ? null : videos[0]);
 }
 
+// Die Kennung des Videos, zu dem der Zeitstempel eines Schritts gehört. Stand am Schritt
+// nichts (alte Rezepte, Rezepte mit nur einem Video), ist es das erste Video des Rezepts.
+// Wichtig beim Kombinieren: dort kommen die Schritte aus verschiedenen Rezepten zusammen.
+export function stepVideoKey(step, sources) {
+  if (stepTime(step) == null) return null;
+  const key = (typeof step === 'object' && step && step.v) || null;
+  return key || videoOf(sources)?.key || null;
+}
+
 // Schritte, deren Video es nicht mehr gibt, verlieren ihren Zeitstempel.
 export function dropMissingTimes(steps, videos) {
   let dropped = 0;
