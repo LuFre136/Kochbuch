@@ -111,3 +111,41 @@ test('prüft Fotos für den Import', async () => {
   assert.match(aiPrompt(null, 'images'), /handschriftlich/);
   assert.doesNotMatch(aiPrompt(null, 'images'), /Titel:/);
 });
+
+test('hochgeladene Videos und eingefügter Text', async () => {
+  const { isVideoPath, aiPrompt, uploadToGemini } = await import('../supabase/functions/import-recipe/index.ts');
+  const uid = '0f8fad5b-d9cb-469f-a165-70867728950e';
+  assert.ok(isVideoPath(`${uid}/a1b2-c3.mp4`));
+  assert.ok(isVideoPath(`${uid}/clip.MOV`));
+  assert.ok(!isVideoPath(`${uid}/../anderer/clip.mp4`));
+  assert.ok(!isVideoPath(`${uid}/clip.exe`));
+  assert.ok(!isVideoPath('clip.mp4'));
+
+  const paste = aiPrompt({ title: '', description: '200 g Mehl, 2 Eier verrühren', tags: [], thumbnail: null, seconds: null }, 'paste');
+  assert.match(paste, /Kommentar/);
+  assert.match(paste, /Text:\n200 g Mehl/);
+  assert.doesNotMatch(paste, /Titel:/);
+
+  // Files-API von Gemini: Upload starten, Datei senden, auf ACTIVE warten.
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push([String(url), init.method ?? 'GET', init.headers]);
+    if (String(url).endsWith('/upload/v1beta/files')) return new Response('{}', { headers: { 'x-goog-upload-url': 'https://upload.example/session' } });
+    if (String(url) === 'https://upload.example/session') return Response.json({ file: { name: 'files/abc', uri: 'https://g/files/abc', state: 'ACTIVE' } });
+    return new Response('nope', { status: 500 });
+  };
+  try {
+    const file = await uploadToGemini('KEY', new Uint8Array([1, 2, 3]), 'video/mp4', Date.now() + 10_000);
+    assert.equal(file.uri, 'https://g/files/abc');
+    assert.equal(calls[0][2]['X-Goog-Upload-Header-Content-Length'], '3');
+    assert.equal(calls[1][2]['X-Goog-Upload-Command'], 'upload, finalize');
+
+    globalThis.fetch = async (url) => (String(url).endsWith('/upload/v1beta/files')
+      ? new Response('{}', { headers: { 'x-goog-upload-url': 'https://upload.example/session' } })
+      : Response.json({ file: { name: 'files/x', uri: 'u', state: 'FAILED' } }));
+    await assert.rejects(uploadToGemini('KEY', new Uint8Array([1]), 'video/mp4', Date.now() + 10_000), /nicht verarbeiten/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

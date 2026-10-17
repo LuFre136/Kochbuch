@@ -16,6 +16,14 @@
 // Fotos von Rezepten (Kochbuchseiten, gedruckt oder handschriftlich):
 // supabase.functions.invoke('import-recipe', { body: { images: ['data:image/jpeg;base64,…', …] } })
 //
+// Hochgeladene Videos (z. B. ein gespeichertes TikTok): die App legt die Datei in den privaten
+// Speicherordner import-videos/<user-id>/… und ruft
+// supabase.functions.invoke('import-recipe', { body: { video: { path, source? } } }) auf.
+// Die Funktion reicht das Video an Gemini weiter und löscht es danach überall. source ist ein
+// optionaler Link zum Video (TikTok, YouTube), damit Quelle, Bild und Springen funktionieren.
+//
+// Eingefügter Text (Kommentar, Nachricht, Notizen): { text: '…' }.
+//
 // Nährwerte kommen, wenn vorhanden, als nutrition: { kcal, protein, fat, carbs, sugar, fiber, salt, per }
 // (Gramm bzw. kcal; per = 'Portion' oder '100 g').
 
@@ -426,11 +434,12 @@ const AI_SCHEMA = {
   required: ['is_recipe', 'title', 'ingredients', 'steps'],
 };
 
-export type AiSource = 'video' | 'text' | 'images';
+export type AiSource = 'video' | 'text' | 'images' | 'paste';
 
 const AI_INTRO: Record<AiSource, string> = {
   video: 'Du bekommst ein Kochvideo samt Titel und Beschreibung. Schau dir das ganze Video an (Bild, Ton und eingeblendete Texte) und schreibe das Rezept auf.',
   text: 'Du bekommst Titel und Beschreibung eines Kochvideos. Schreibe das Rezept auf, das darin steht.',
+  paste: 'Du bekommst einen Text, in dem ein Rezept steht, z. B. einen Kommentar, eine Nachricht oder Notizen. Schreibe das Rezept auf.',
   images: 'Du bekommst ein oder mehrere Fotos eines Rezepts, z. B. Seiten aus einem Kochbuch oder eine handschriftliche Rezeptkarte. Lies das Rezept vollständig ab (auch Handschrift; mehrere Fotos gehören zu einem Rezept) und schreibe es auf.',
 };
 
@@ -451,14 +460,15 @@ export function aiPrompt(meta: VideoMeta | null, source: AiSource): string {
     '- notes: Tipps und Varianten, sonst leer.',
     '- nutrition: nur, wenn Nährwerte ausdrücklich angegeben sind (kcal und Gramm; per_100g = true, wenn sie für 100 g gelten, sonst pro Portion). Nicht schätzen; sonst null.',
     '- Ist es kein Rezept, setze is_recipe auf false und lass Zutaten und Schritte leer.',
-    ...(meta ? ['', `Titel: ${meta.title}`, `Beschreibung:\n${meta.description.slice(0, 8000) || '(keine)'}`] : []),
+    ...(meta && source === 'paste' ? ['', `Text:\n${meta.description.slice(0, MAX_TEXT)}`]
+      : meta ? ['', `Titel: ${meta.title}`, `Beschreibung:\n${meta.description.slice(0, 8000) || '(keine)'}`] : []),
   ].join('\n');
 }
 
 const RETRY_STATUS = new Set([404, 429, 500, 503]);
 
 // deno-lint-ignore no-explicit-any
-async function askGemini(key: string, parts: any[], lowResolution = true): Promise<Record<string, unknown>> {
+async function askGemini(key: string, parts: any[], lowResolution = true, timeoutMs = 110_000): Promise<Record<string, unknown>> {
   const models = [...new Set([env('GEMINI_MODEL'), 'gemini-flash-latest', 'gemini-2.5-flash'].filter(Boolean))] as string[];
   let lastError = '';
   for (const model of models) {
@@ -475,7 +485,7 @@ async function askGemini(key: string, parts: any[], lowResolution = true): Promi
           ...(lowResolution ? { mediaResolution: 'MEDIA_RESOLUTION_LOW' } : {}),
         },
       }),
-      signal: AbortSignal.timeout(110_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (res.ok) {
       const data = await res.json();
@@ -614,8 +624,13 @@ async function importPhotos(images: unknown) {
   } catch (err) {
     return json({ error: `Die Fotos konnten nicht ausgewertet werden: ${(err as Error).message}` }, 502);
   }
+  return json({ ...aiResult(ai), source: '', image: null, photos: true });
+}
+
+// Ergebnis der KI als Antwort für die App (Fotos, hochgeladene Videos, eingefügter Text).
+function aiResult(ai: ReturnType<typeof normalizeAiRecipe>) {
   const found = ai.is_recipe && (ai.ingredients.length > 0 || ai.steps.length > 0);
-  return json({
+  return {
     title: ai.title,
     description: found ? ai.description : '',
     tags: found ? ai.tags : [],
@@ -627,10 +642,145 @@ async function importPhotos(images: unknown) {
     notes: found ? ai.notes : '',
     nutrition: found ? ai.nutrition : null,
     structured: found,
-    source: '',
-    image: null,
-    photos: true,
+  };
+}
+
+const MAX_TEXT = 20_000;
+
+async function importText(text: unknown) {
+  const t = String(text ?? '').trim();
+  if (t.length < 20) return json({ error: 'Bitte einen längeren Text mit dem Rezept einfügen.' }, 400);
+  const key = env('GEMINI_API_KEY');
+  if (!key) return json({ error: 'Für Texte fehlt in Supabase das Secret GEMINI_API_KEY.' }, 400);
+  try {
+    const meta = { title: '', description: t, tags: [], thumbnail: null, seconds: null };
+    const ai = normalizeAiRecipe(await askGemini(key, [{ text: aiPrompt(meta, 'paste') }]), null, false);
+    return json({ ...aiResult(ai), source: '', image: null, pasted: true });
+  } catch (err) {
+    return json({ error: `Der Text konnte nicht ausgewertet werden: ${(err as Error).message}` }, 502);
+  }
+}
+
+export const VIDEO_BUCKET = 'import-videos';
+export const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
+const VIDEO_TYPES = ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-m4v', 'video/3gpp'];
+
+// Pfad im Speicherordner: <user-id>/<datei>; die Zugriffsregeln erlauben nur den eigenen Ordner.
+export const isVideoPath = (p: unknown): p is string =>
+  typeof p === 'string' && /^[0-9a-f-]{36}\/[\w-]{1,80}\.(mp4|mov|webm|m4v|3gp)$/i.test(p);
+
+const GEMINI = 'https://generativelanguage.googleapis.com';
+
+// Lädt ein Video über die Files-API zu Gemini und wartet, bis es verarbeitet ist.
+export async function uploadToGemini(key: string, bytes: Uint8Array, mimeType: string, deadline: number) {
+  const start = await fetch(`${GEMINI}/upload/v1beta/files`, {
+    method: 'POST',
+    headers: {
+      'x-goog-api-key': key,
+      'X-Goog-Upload-Protocol': 'resumable',
+      'X-Goog-Upload-Command': 'start',
+      'X-Goog-Upload-Header-Content-Length': String(bytes.length),
+      'X-Goog-Upload-Header-Content-Type': mimeType,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ file: { display_name: 'kochbuch-import' } }),
+    signal: AbortSignal.timeout(20_000),
   });
+  const uploadUrl = start.headers.get('x-goog-upload-url');
+  if (!start.ok || !uploadUrl) throw new Error(`Gemini: Hochladen fehlgeschlagen (${start.status})`);
+  const done = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: { 'X-Goog-Upload-Command': 'upload, finalize', 'X-Goog-Upload-Offset': '0' },
+    body: bytes,
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!done.ok) throw new Error(`Gemini: Hochladen fehlgeschlagen (${done.status})`);
+  let file = (await done.json()).file as { name: string; uri: string; mimeType?: string; state?: string };
+  // Gemini muss das Video erst verarbeiten (state PROCESSING), bevor es Fragen dazu beantwortet.
+  while (file.state === 'PROCESSING') {
+    if (Date.now() > deadline) throw new Error('Gemini braucht zu lange für dieses Video. Versuche ein kürzeres.');
+    await new Promise((r) => setTimeout(r, 2000));
+    file = await getJson(`${GEMINI}/v1beta/${file.name}`, { headers: { 'x-goog-api-key': key } }) as typeof file;
+  }
+  if (file.state === 'FAILED') throw new Error('Gemini konnte das Video nicht verarbeiten.');
+  return file;
+}
+
+async function deleteGeminiFile(key: string, name: string) {
+  try {
+    await fetch(`${GEMINI}/v1beta/${name}`, { method: 'DELETE', headers: { 'x-goog-api-key': key }, signal: AbortSignal.timeout(10_000) });
+  } catch { /* Gemini löscht hochgeladene Dateien ohnehin nach 48 Stunden */ }
+}
+
+// Löst Kurzlinks von TikTok auf.
+async function resolveUrl(url: string): Promise<string> {
+  if (!isTikTokShortLink(url)) return url;
+  const res = await fetch(url, { headers: { 'User-Agent': UA }, redirect: 'follow', signal: AbortSignal.timeout(10_000) });
+  await res.body?.cancel();
+  return res.url || url;
+}
+
+async function importUploadedVideo(req: Request, input: { path?: unknown; source?: unknown }) {
+  const started = Date.now();
+  const path = input?.path;
+  if (!isVideoPath(path)) return json({ error: 'Ungültige Videodatei.' }, 400);
+  const base = env('SUPABASE_URL');
+  // Mit der Anmeldung des Nutzers: Supabase lässt so nur Dateien aus dem eigenen Ordner zu.
+  const storageHeaders = { Authorization: req.headers.get('authorization') ?? '', apikey: req.headers.get('apikey') ?? '' };
+  const objectUrl = `${base}/storage/v1/object/${VIDEO_BUCKET}/${path}`;
+  const removeUpload = () => fetch(objectUrl, { method: 'DELETE', headers: storageHeaders }).then((r) => r.body?.cancel()).catch(() => {});
+
+  const key = env('GEMINI_API_KEY');
+  if (!key) { await removeUpload(); return json({ error: 'Für Videos fehlt in Supabase das Secret GEMINI_API_KEY.' }, 400); }
+
+  // Optionaler Link zum Video: Titel, Bild und Bildunterschrift dazu, und die Zeitstempel springen später im Player.
+  let video: VideoRef | null = null;
+  let source = '';
+  let meta: VideoMeta | null = null;
+  const sourceUrl = String(input?.source ?? '').trim();
+  if (isAllowedUrl(sourceUrl)) {
+    try {
+      const resolved = await resolveUrl(sourceUrl);
+      video = parseVideoUrl(resolved);
+      if (video) {
+        source = videoSource(video, resolved);
+        meta = video.provider === 'youtube' ? await youtubeMeta(video.id) : await tiktokMeta(source);
+      }
+    } catch { /* ohne Zusatzangaben weiter */ }
+  }
+
+  let geminiFile: { name: string; uri: string } | null = null;
+  try {
+    const res = await fetch(objectUrl, { headers: storageHeaders, signal: AbortSignal.timeout(30_000) });
+    if (!res.ok) return json({ error: `Das Video wurde im Speicher nicht gefunden (${res.status}).` }, 404);
+    const type = (res.headers.get('content-type') ?? '').split(';')[0];
+    // Gemini kennt iPhone-Videos (QuickTime) unter video/mov.
+    const mimeType = type === 'video/quicktime' ? 'video/mov' : type === 'video/x-m4v' ? 'video/mp4' : VIDEO_TYPES.includes(type) ? type : 'video/mp4';
+    const bytes = await readLimited(res, MAX_VIDEO_BYTES);
+    // Die Funktion darf insgesamt etwa 150 Sekunden laufen; Puffer für die Antwort von Gemini lassen.
+    geminiFile = await uploadToGemini(key, bytes, mimeType, started + 70_000);
+    const parts = [
+      { file_data: { mime_type: mimeType, file_uri: geminiFile.uri } },
+      { text: aiPrompt(meta, 'video') },
+    ];
+    const timeLeft = Math.max(20_000, 140_000 - (Date.now() - started));
+    const ai = normalizeAiRecipe(await askGemini(key, parts, true, timeLeft), meta?.seconds ?? null, true);
+    const image = meta?.thumbnail ? await fetchImage(meta.thumbnail) : null;
+    const result = aiResult(ai);
+    return json({
+      ...result,
+      title: result.title || meta?.title || '',
+      source,
+      image,
+      ...(video ? { video } : {}),
+      uploaded: true,
+    });
+  } catch (err) {
+    return json({ error: `Das Video konnte nicht ausgewertet werden: ${(err as Error).message}` }, 502);
+  } finally {
+    if (geminiFile) await deleteGeminiFile(key, geminiFile.name);
+    await removeUpload();
+  }
 }
 
 async function readLimited(res: Response, limit: number): Promise<Uint8Array> {
@@ -643,7 +793,7 @@ async function readLimited(res: Response, limit: number): Promise<Uint8Array> {
     size += value.length;
     if (size > limit) {
       await reader.cancel();
-      throw new Error('Die Seite ist zu groß.');
+      throw new Error('Die Datei ist zu groß.');
     }
     chunks.push(value);
   }
@@ -703,20 +853,18 @@ async function handle(req: Request): Promise<Response> {
   try {
     const body = await req.json();
     if (body.images) return await importPhotos(body.images);
+    if (body.video) return await importUploadedVideo(req, body.video);
+    if (body.text != null) return await importText(body.text);
     url = String(body.url ?? '').trim();
   } catch {
     return json({ error: 'Ungültige Anfrage.' }, 400);
   }
   if (!isAllowedUrl(url)) return json({ error: 'Bitte einen gültigen Link (https://…) eingeben.' }, 400);
 
-  if (isTikTokShortLink(url)) {
-    try {
-      const res = await fetch(url, { headers: { 'User-Agent': UA }, redirect: 'follow', signal: AbortSignal.timeout(10_000) });
-      await res.body?.cancel();
-      url = res.url || url;
-    } catch {
-      return json({ error: 'Der TikTok-Link konnte nicht aufgelöst werden.' }, 502);
-    }
+  try {
+    url = await resolveUrl(url);
+  } catch {
+    return json({ error: 'Der TikTok-Link konnte nicht aufgelöst werden.' }, 502);
   }
   const video = parseVideoUrl(url);
   if (video) return json(await importVideo(video, url));
