@@ -17,6 +17,10 @@ import {
 import {
   pairOf, alternativeIds, alternativeGroup, suggestAlternatives,
 } from './alternatives.js';
+import {
+  ingredientsFromStep, remainingIngredients, ingredientKey, mentionsIngredient,
+  scaleIngredient, combinedTitle,
+} from './combine.js';
 
 const app = document.getElementById('app');
 const nav = document.getElementById('nav');
@@ -33,6 +37,7 @@ let placesSaved = true; // false, solange ingredient_categories keine Spalte pla
 let myName; // Benutzername: undefined = noch nicht geladen, null = fehlt noch, false = benutzername.sql nicht eingerichtet
 let links = null; // Alternativ-Verknüpfungen [{ recipe_a, recipe_b }]; null = noch nicht geladen
 let linksTable = true; // false, solange alternativen.sql nicht ausgeführt wurde
+let pendingNew = null; // Vorbelegung für ein neues Rezept, z. B. aus dem Kombinieren
 let activeTag = null;
 let listSort = 'name';
 let recoveringPassword = false;
@@ -274,6 +279,7 @@ async function render() {
     else if (first === 'kochbuch' && id) await renderCookbook(id);
     else if (first === 'kochen') await renderPantry();
     else if (first === 'saison') await renderSeason();
+    else if (first === 'kombinieren') await renderCombine(id);
     else if (first === 'neu') await renderEditor(null);
     else if (first === 'r' && id && action === 'bearbeiten') await renderEditor(id);
     else if (first === 'r' && id && action === 'alt' && extra) await renderDetail(id, extra);
@@ -462,7 +468,7 @@ const TABS = [
 
 function renderTabbar(first) {
   if (!session) { tabbar.hidden = true; return; }
-  const active = { '': 'list', r: 'list', neu: 'list', kochen: 'pantry', saison: 'pantry', plan: 'plan', einkauf: 'shop', geteilt: 'shared', kochbuch: 'shared', liste: 'shop' }[first || ''];
+  const active = { '': 'list', r: 'list', neu: 'list', kombinieren: 'list', kochen: 'pantry', saison: 'pantry', plan: 'plan', einkauf: 'shop', geteilt: 'shared', kochbuch: 'shared', liste: 'shop' }[first || ''];
   tabbar.hidden = false;
   tabbar.innerHTML = TABS.map(([key, href, label]) => `<a href="${href}" class="${key === active ? 'active' : ''}"${key === active ? ' aria-current="page"' : ''}>
     <svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[key]}</svg><span>${label}</span></a>`).join('');
@@ -959,6 +965,7 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
       <div class="actions">${own ? `
         <button class="btn primary" id="plan-btn">Einplanen</button>
         <a class="btn" href="#/r/${r.id}/bearbeiten">Bearbeiten</a>
+        <a class="btn" href="#/kombinieren/${r.id}">Kombinieren</a>
         <button class="btn" id="share">Teilen</button>
         ${r.share_token ? '<button class="btn ghost" id="unshare">Teilen beenden</button>' : ''}
         <button class="btn danger" id="del">Löschen</button>` : session
@@ -1132,6 +1139,241 @@ async function saveAlternatives(recipeId, wanted) {
   if (added.length || removed.length) await loadAlternatives(true);
 }
 
+// ---------- Rezepte kombinieren ----------
+
+// Stellt aus den Schritten mehrerer Rezepte ein neues zusammen. mainId: das Hauptrezept,
+// aus dem Zutaten und Personenzahl zunächst übernommen werden.
+async function renderCombine(mainId) {
+  const { all } = await searchableRecipes();
+  const main = all.find((x) => x.id === mainId) ?? all[0];
+  if (!main) {
+    app.innerHTML = '<div class="notice"><p>Dafür braucht es mindestens ein Rezept.</p><a class="btn" href="#/">Zur Übersicht</a></div>';
+    return;
+  }
+  window.scrollTo(0, 0);
+  const servings = main.servings;
+  let chosen = [main];
+  let active = main.id;
+  let picked = []; // gewählte Schritte in ihrer Reihenfolge: { rid, i, text, t, v }
+  // Zutaten des neuen Rezepts. via: Schritte, über die sie dazugekommen sind; manual: von Hand.
+  let ings = main.ingredients.map((i) => ({ ing: { ...i }, from: main.id, via: new Set(), manual: true }));
+  let hints = [];
+
+  const byId = (id) => chosen.find((x) => x.id === id);
+  const stepKey = (rid, i) => `${rid}:${i}`;
+  const stepsOf = (r) => r.steps.map((st, i) => ({ i, text: stepText(st), t: stepTime(st), v: (typeof st === 'object' && st?.v) || null }));
+  const haveIngredients = () => ings.map((x) => x.ing);
+
+  app.innerHTML = `
+    <div class="combine">
+      <a class="back" href="#/r/${esc(main.id)}">← ${esc(main.title)}</a>
+      <h1>Rezepte kombinieren</h1>
+      <p class="hint">Hauptrezept ist <strong>${esc(main.title)}</strong>: seine Zutaten und ${servings} ${servings === 1 ? 'Person' : 'Personen'} stehen schon im neuen Rezept.
+        Tippe die Schritte in der Reihenfolge an, in der du kochen willst.</p>
+      <div class="chips static" id="combine-recipes"></div>
+      <button type="button" class="btn small" id="combine-add">+ Rezept</button>
+
+      <section class="card-panel" id="combine-new"></section>
+
+      <div class="chips" id="combine-tabs"></div>
+      <ol class="combine-steps" id="combine-source"></ol>
+
+      <div class="actions">
+        <button type="button" class="btn primary" id="combine-next">Weiter</button>
+      </div>
+    </div>`;
+
+  const drawRecipes = () => {
+    $('#combine-recipes').innerHTML = chosen.map((r) => `<span class="chip">${esc(r.title)}${r.id === main.id ? ' (Haupt)' : ''}
+      ${r.id === main.id ? '' : `<button type="button" data-drop="${esc(r.id)}" aria-label="${esc(r.title)} entfernen">×</button>`}</span>`).join('');
+    $('#combine-recipes').querySelectorAll('[data-drop]').forEach((b) => {
+      b.onclick = () => {
+        const rid = b.dataset.drop;
+        chosen = chosen.filter((x) => x.id !== rid);
+        picked.filter((p) => p.rid === rid).forEach((p) => dropIngredientsOf(p));
+        picked = picked.filter((p) => p.rid !== rid);
+        if (active === rid) active = main.id;
+        drawAll();
+      };
+    });
+  };
+
+  // Zutaten entfernen, die nur über diesen Schritt dazugekommen sind.
+  const dropIngredientsOf = (p) => {
+    const key = stepKey(p.rid, p.i);
+    ings = ings.filter((x) => {
+      x.via.delete(key);
+      return x.manual || x.via.size > 0;
+    });
+  };
+
+  const addStep = (rid, i) => {
+    const r = byId(rid);
+    const st = stepsOf(r)[i];
+    if (!st) return;
+    picked.push({ rid, i, text: st.text, t: st.t, v: st.v });
+    const key = stepKey(rid, i);
+    // Zutaten, die dieser Schritt nennt und die noch fehlen, kommen dazu.
+    for (const ing of ingredientsFromStep(st.text, r, haveIngredients(), servings)) {
+      ings.push({ ing, from: rid, via: new Set([key]), manual: false });
+    }
+    // Steht die Zutat schon mit anderer Menge im Rezept, bleibt die des Hauptrezepts.
+    const factor = servings / (r.servings || servings);
+    for (const i2 of r.ingredients) {
+      if (!i2.name || !mentionsIngredient(st.text, i2.name)) continue;
+      const mine = ings.find((x) => ingredientKey(x.ing) === ingredientKey(i2));
+      if (!mine || mine.from === rid) continue;
+      const scaled = scaleIngredient(i2, factor);
+      const a = formatQuantity(mine.ing);
+      const b = formatQuantity(scaled);
+      if (a !== b) hints.push(`${r.title} nennt ${b || 'ohne Menge'} ${i2.name} (hier stehen ${a || 'keine Menge'}).`);
+    }
+  };
+
+  const removeStep = (n) => {
+    const [p] = picked.splice(n, 1);
+    if (p) dropIngredientsOf(p);
+    hints = [];
+  };
+
+  const moveStep = (n, d) => {
+    const to = n + d;
+    if (to < 0 || to >= picked.length) return;
+    [picked[n], picked[to]] = [picked[to], picked[n]];
+  };
+
+  const drawNew = () => {
+    const box = $('#combine-new');
+    const rest = chosen
+      .filter((r) => r.id !== main.id)
+      .map((r) => [r, remainingIngredients(r, haveIngredients(), servings)])
+      .filter(([, list]) => list.length);
+    box.innerHTML = `<h2>Neues Rezept</h2>
+      ${picked.length ? `<ol class="step-order">${picked.map((p, n) => `<li>
+          <span>${esc(p.text)}<small>${esc(byId(p.rid)?.title ?? '')}${p.t != null ? ` · ▶ ${formatTime(p.t)}` : ''}</small></span>
+          <span class="row">
+            <button type="button" class="btn small" data-up="${n}" aria-label="Nach oben"${n === 0 ? ' disabled' : ''}>↑</button>
+            <button type="button" class="btn small" data-down="${n}" aria-label="Nach unten"${n === picked.length - 1 ? ' disabled' : ''}>↓</button>
+            <button type="button" class="link danger-link" data-off="${n}">Raus</button>
+          </span></li>`).join('')}</ol>`
+    : '<p class="hint">Noch kein Schritt gewählt. Tippe unten auf die Schritte.</p>'}
+
+      <h3>Zutaten</h3>
+      <ul class="ingredients">${ings.map((x, n) => `<li><span class="qty">${esc(formatQuantity(x.ing))}</span>
+        <span>${ingredientLabel(x.ing)}${x.from === main.id ? '' : ` <small>aus ${esc(byId(x.from)?.title ?? '')}</small>`}</span>
+        <button type="button" class="link danger-link" data-noing="${n}" aria-label="${esc(x.ing.name)} entfernen">×</button></li>`).join('')}</ul>
+      ${hints.length ? `<ul class="hint">${[...new Set(hints)].map((h) => `<li>${esc(h)}</li>`).join('')}</ul>` : ''}
+
+      ${rest.map(([r, list]) => `<details><summary>Weitere Zutaten aus ${esc(r.title)}</summary>
+        <div class="chips static">${list.map((i) => `<button type="button" class="chip add" data-addfrom="${esc(r.id)}" data-name="${esc(i.name)}">+ ${esc(ingredientToLine(i))}</button>`).join('')}</div>
+      </details>`).join('')}`;
+
+    box.querySelectorAll('[data-up]').forEach((b) => { b.onclick = () => { moveStep(Number(b.dataset.up), -1); drawAll(); }; });
+    box.querySelectorAll('[data-down]').forEach((b) => { b.onclick = () => { moveStep(Number(b.dataset.down), 1); drawAll(); }; });
+    box.querySelectorAll('[data-off]').forEach((b) => { b.onclick = () => { removeStep(Number(b.dataset.off)); drawAll(); }; });
+    box.querySelectorAll('[data-noing]').forEach((b) => {
+      b.onclick = () => { ings.splice(Number(b.dataset.noing), 1); drawAll(); };
+    });
+    box.querySelectorAll('[data-addfrom]').forEach((b) => {
+      b.onclick = () => {
+        const r = byId(b.dataset.addfrom);
+        const found = remainingIngredients(r, haveIngredients(), servings).find((i) => i.name === b.dataset.name);
+        if (found) ings.push({ ing: found, from: r.id, via: new Set(), manual: true });
+        drawAll();
+      };
+    });
+  };
+
+  const drawSource = () => {
+    $('#combine-tabs').innerHTML = chosen.map((r) => `<button type="button" class="chip${r.id === active ? ' active' : ''}" data-tab="${esc(r.id)}">${esc(r.title)}</button>`).join('');
+    $('#combine-tabs').querySelectorAll('[data-tab]').forEach((b) => {
+      b.onclick = () => { active = b.dataset.tab; drawAll(); };
+    });
+    const r = byId(active);
+    const list = stepsOf(r);
+    $('#combine-source').innerHTML = list.length ? list.map((st) => {
+      const at = picked.findIndex((p) => p.rid === r.id && p.i === st.i);
+      return `<li><button type="button" class="combine-step${at >= 0 ? ' on' : ''}" data-pick="${st.i}"
+        aria-pressed="${at >= 0}">${at >= 0 ? `<span class="num">${at + 1}</span>` : '<span class="num">+</span>'}
+        <span>${esc(st.text)}${st.t != null ? ` <small>▶ ${formatTime(st.t)}</small>` : ''}</span></button></li>`;
+    }).join('') : '<li class="hint">Dieses Rezept hat keine Schritte.</li>';
+    $('#combine-source').querySelectorAll('[data-pick]').forEach((b) => {
+      b.onclick = () => {
+        const i = Number(b.dataset.pick);
+        const at = picked.findIndex((p) => p.rid === r.id && p.i === i);
+        if (at >= 0) removeStep(at);
+        else addStep(r.id, i);
+        drawAll();
+      };
+    });
+  };
+
+  const drawAll = () => { drawRecipes(); drawNew(); drawSource(); };
+  drawAll();
+
+  $('#combine-add').onclick = async () => {
+    const taken = new Set(chosen.map((x) => x.id));
+    const picked2 = await chooseRecipeSheet(all.filter((x) => !taken.has(x.id)), new Map());
+    if (!picked2) return;
+    const r = all.find((x) => x.id === picked2.id);
+    if (r) { chosen.push(r); active = r.id; }
+    drawAll();
+  };
+
+  $('#combine-next').onclick = () => {
+    if (!picked.length) { toast('Wähle zuerst Schritte aus.'); return; }
+    if (chosen.length < 2) { toast('Füge mindestens ein zweites Rezept hinzu.'); return; }
+    // Das neue Rezept wird im Formular geöffnet; gespeichert wird dort wie gewohnt.
+    pendingNew = {
+      title: combinedTitle(chosen.map((r) => r.title)),
+      description: main.description,
+      tags: [...new Set(chosen.flatMap((r) => r.tags))],
+      servings,
+      total_minutes: main.total_minutes,
+      cook_minutes: main.cook_minutes,
+      ingredients: haveIngredients(),
+      steps: picked.map((p) => makeStep(p.text, p.t, p.v)),
+      sources: [...new Set(chosen.flatMap((r) => r.sources))],
+      notes: [main.notes, `Kombiniert aus ${chosen.map((r) => r.title).join(' und ')}.`].filter(Boolean).join('\n\n'),
+      images: [],
+      imagePaths: main.from ? [] : main.images, // Bilder des Hauptrezepts werden kopiert
+      combinedFrom: chosen.filter((r) => !r.from).map((r) => r.id),
+    };
+    location.hash = '#/neu';
+  };
+}
+
+// Fragt nach dem Speichern, ob die Ausgangsrezepte gelöscht werden sollen.
+async function askDeleteSources(sources) {
+  const own = sources.filter(Boolean);
+  if (!own.length) return;
+  let busy = new Set();
+  try {
+    const [plan, items] = await Promise.all([
+      loadPlan().catch(() => []),
+      supabase.from('shopping_items').select('sources').then(({ data }) => data ?? []).catch(() => []),
+    ]);
+    busy = new Set([...plan.map((p) => p.recipe_id), ...recipesOnList(items).map((x) => x.recipe_id)]);
+  } catch { /* Hinweis ist nur nett, nicht nötig */ }
+  const warn = own.filter((r) => busy.has(r.id));
+  const { value } = await openSheet(`<h2>${own.length === 1 ? 'Ausgangsrezept' : 'Ausgangsrezepte'} löschen?</h2>
+    <p>Das kombinierte Rezept ist gespeichert und mit ${own.length === 1 ? 'dem Ausgangsrezept' : 'den Ausgangsrezepten'} als Alternative verknüpft.</p>
+    <ul class="hint">${own.map((r) => `<li>${esc(r.title)}</li>`).join('')}</ul>
+    ${warn.length ? `<p class="hint">${warn.map((r) => esc(r.title)).join(', ')} ${warn.length === 1 ? 'steht' : 'stehen'} noch im Essensplan oder auf einer Einkaufsliste.</p>` : ''}
+    <p class="hint">Beim Löschen gehen auch die Bilder und die Verknüpfungen der Ausgangsrezepte weg.</p>
+    <div class="row"><button class="btn ghost" value="keep">Behalten</button>
+      <button class="btn danger" value="delete">Löschen</button></div>`);
+  if (value !== 'delete') return;
+  for (const r of own) {
+    const { error } = await supabase.from('recipes').delete().eq('id', r.id);
+    if (error) { toast(error.message); return; }
+    if (r.images.length) await supabase.storage.from(IMAGE_BUCKET).remove(r.images);
+    if (recipes) recipes = recipes.filter((x) => x.id !== r.id);
+    if (links) links = links.filter((l) => l.recipe_a !== r.id && l.recipe_b !== r.id);
+  }
+  toast(own.length === 1 ? 'Ausgangsrezept gelöscht' : 'Ausgangsrezepte gelöscht');
+}
+
 // Rezept-Auswahl mit Suchfeld. Liefert { id, withGroup } oder null. withGroup = true,
 // wenn auch alle Alternativen des gewählten Rezepts übernommen werden sollen.
 function chooseRecipeSheet(candidates, altCount) {
@@ -1178,7 +1420,10 @@ async function renderEditor(id) {
   const existing = id ? own.find((x) => x.id === id) : null;
   if (id && !existing) { location.hash = '#/'; return; }
   window.scrollTo(0, 0);
-  const r = existing || {
+  // Aus dem Kombinieren kommt ein vorbelegtes Rezept; es gilt nur für dieses eine Formular.
+  const combined = existing ? null : pendingNew;
+  pendingNew = null;
+  const r = existing || combined || {
     title: '', description: '', tags: [], servings: 2, total_minutes: null, cook_minutes: null,
     ingredients: [], steps: [], sources: [], notes: '', images: [],
   };
@@ -1193,9 +1438,9 @@ async function renderEditor(id) {
   app.innerHTML = `
     <form class="editor" id="editor">
       <a class="back" href="${existing ? `#/r/${existing.id}` : '#/'}">← Abbrechen</a>
-      <h1>${existing ? 'Rezept bearbeiten' : 'Neues Rezept'}</h1>
+      <h1>${existing ? 'Rezept bearbeiten' : combined ? 'Kombiniertes Rezept' : 'Neues Rezept'}</h1>
 
-      ${existing ? '' : `<div class="import card-panel">
+      ${existing || combined ? '' : `<div class="import card-panel">
         <label>Aus Link importieren
           <div class="import-row">
             <input type="url" id="import-url" inputmode="url" placeholder="https://www.chefkoch.de/rezepte/…" autocomplete="off">
@@ -1429,7 +1674,23 @@ async function renderEditor(id) {
     NUTRIENTS.forEach(([k]) => { form[`n_${k}`].value = n[k] ?? ''; });
     $('.nutrition-edit').open = true;
   };
-  if (!existing) setupImport(form, { setTags, setSteps, addImage: (file) => { newFiles.push({ file, preview: URL.createObjectURL(file) }); drawThumbs(); }, drawPreview, setNutrition });
+  // Die Bilder des Hauptrezepts werden kopiert, damit sie auch bleiben, wenn es gelöscht wird.
+  if (combined?.imagePaths?.length) {
+    (async () => {
+      for (const path of combined.imagePaths) {
+        try {
+          const res = await fetch(imageUrl(path));
+          if (!res.ok) continue;
+          const blob = await res.blob();
+          const file = new File([blob], 'bild.jpg', { type: blob.type || 'image/jpeg' });
+          newFiles.push({ file, preview: URL.createObjectURL(file) });
+        } catch { /* ein fehlendes Bild hält das Speichern nicht auf */ }
+      }
+      drawThumbs();
+    })();
+  }
+
+  if (!existing && !combined) setupImport(form, { setTags, setSteps, addImage: (file) => { newFiles.push({ file, preview: URL.createObjectURL(file) }); drawThumbs(); }, drawPreview, setNutrition });
 
   form.onsubmit = async (e) => {
     e.preventDefault();
@@ -1480,7 +1741,9 @@ async function renderEditor(id) {
       const { data, error } = await supabase.from('recipes').upsert(row).select().single();
       if (error) throw error;
       await rememberCategories(row.ingredients.map((i) => i.name));
-      if (linksTable) await saveAlternatives(data.id, altIds);
+      // Ein kombiniertes Rezept wird mit allen Ausgangsrezepten verknüpft.
+      const wanted = [...new Set([...altIds, ...(combined?.combinedFrom ?? [])])].filter((x) => x !== data.id);
+      if (linksTable) await saveAlternatives(data.id, wanted);
 
       const removed = existing ? existing.images.filter((p) => !keptImages.includes(p)) : [];
       if (removed.length) await supabase.storage.from(IMAGE_BUCKET).remove(removed);
@@ -1492,6 +1755,9 @@ async function renderEditor(id) {
       toast(dropped.dropped
         ? `Gespeichert. ${dropped.dropped} ${dropped.dropped === 1 ? 'Zeitstempel' : 'Zeitstempel'} ohne Video entfernt.`
         : 'Gespeichert');
+      if (combined?.combinedFrom?.length) {
+        await askDeleteSources(combined.combinedFrom.map((id) => own.find((x) => x.id === id)).filter(Boolean));
+      }
       location.hash = `#/r/${data.id}`;
     } catch (err) {
       if (uploaded.length) await supabase.storage.from(IMAGE_BUCKET).remove(uploaded);
