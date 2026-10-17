@@ -10,8 +10,14 @@
 // Videos (YouTube, YouTube Shorts, TikTok) wertet Google Gemini aus. Dann sind Schritte
 // { text, t } mit t = Sekunden im Video, und die Antwort enthält zusätzlich
 // video: { provider, id } und ai: 'ok' | 'none' | 'failed' (+ ai_error).
-// Secrets in Supabase: GEMINI_API_KEY (nötig für Videos), YOUTUBE_API_KEY (Titel und
+// Secrets in Supabase: GEMINI_API_KEY (nötig für Videos und Fotos), YOUTUBE_API_KEY (Titel und
 // Beschreibung von YouTube), optional GEMINI_MODEL.
+//
+// Fotos von Rezepten (Kochbuchseiten, gedruckt oder handschriftlich):
+// supabase.functions.invoke('import-recipe', { body: { images: ['data:image/jpeg;base64,…', …] } })
+//
+// Nährwerte kommen, wenn vorhanden, als nutrition: { kcal, protein, fat, carbs, sugar, fiber, salt, per }
+// (Gramm bzw. kcal; per = 'Portion' oder '100 g').
 
 const MAX_PAGE_BYTES = 5_000_000;
 const MAX_IMAGE_BYTES = 8_000_000;
@@ -62,6 +68,42 @@ export function parseYield(y: unknown): number | null {
     }
   }
   return null;
+}
+
+export interface Nutrition {
+  kcal?: number; protein?: number; fat?: number; carbs?: number; sugar?: number; fiber?: number; salt?: number;
+  per: 'Portion' | '100 g';
+}
+
+const NUTRIENTS: [keyof Omit<Nutrition, 'per'>, string][] = [
+  ['protein', 'proteinContent'], ['fat', 'fatContent'], ['carbs', 'carbohydrateContent'],
+  ['sugar', 'sugarContent'], ['fiber', 'fiberContent'], ['salt', 'sodiumContent'],
+];
+
+function amountOf(v: unknown): number | null {
+  const m = String(v ?? '').replace(',', '.').match(/\d+(?:\.\d+)?/);
+  return m ? Number(m[0]) : null;
+}
+
+// schema.org NutritionInformation, z. B. { calories: "542 kcal", proteinContent: "25,4 g" }.
+export function parseNutrition(raw: unknown): Nutrition | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const n = raw as Record<string, unknown>;
+  const out: Nutrition = { per: /100\s*g/i.test(String(n.servingSize ?? '')) ? '100 g' : 'Portion' };
+  const cal = String(n.calories ?? '');
+  const calValue = amountOf(cal);
+  if (calValue != null) out.kcal = Math.round(/kj/i.test(cal) && !/kcal/i.test(cal) ? calValue / 4.184 : calValue);
+  for (const [key, prop] of NUTRIENTS) {
+    let value = amountOf(n[prop]);
+    if (value == null) continue;
+    if (key === 'salt') {
+      // Natrium in Salz umrechnen (1 g Natrium ≈ 2,5 g Salz); mg berücksichtigen.
+      if (/mg/i.test(String(n[prop]))) value /= 1000;
+      value *= 2.5;
+    }
+    out[key] = Math.round(value * 10) / 10;
+  }
+  return Object.keys(out).length > 1 ? out : null;
 }
 
 function types(node: Record<string, unknown>): string[] {
@@ -180,6 +222,7 @@ export interface ImportedRecipe {
   ingredients: string[];
   steps: string[];
   notes: string;
+  nutrition: Nutrition | null;
   imageUrl: string | null;
   structured: boolean;
 }
@@ -206,6 +249,7 @@ export function extractRecipe(html: string, pageUrl: string): ImportedRecipe {
       title: metaContent(html, 'og:title') ?? cleanText(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]),
       description: metaContent(html, 'og:description') ?? metaContent(html, 'description') ?? '',
       tags: [], servings: null, total_minutes: null, cook_minutes: null, ingredients: [], steps: [], notes: '',
+      nutrition: null,
       imageUrl: absolute(metaContent(html, 'og:image')),
       structured: false,
     };
@@ -232,6 +276,7 @@ export function extractRecipe(html: string, pageUrl: string): ImportedRecipe {
     cook_minutes: cook,
     ingredients: listOfLines(recipe.recipeIngredient ?? recipe.ingredients),
     ...splitNotes(extractInstructions(recipe.recipeInstructions)),
+    nutrition: parseNutrition(recipe.nutrition),
     imageUrl: absolute(firstImageUrl(recipe.image) ?? metaContent(html, 'og:image')),
     structured: true,
   };
@@ -367,36 +412,53 @@ const AI_SCHEMA = {
       items: { type: 'OBJECT', properties: { text: { type: 'STRING' }, start: { type: 'STRING', nullable: true } }, required: ['text'] },
     },
     notes: { type: 'STRING' },
+    nutrition: {
+      type: 'OBJECT',
+      nullable: true,
+      properties: {
+        kcal: { type: 'NUMBER', nullable: true }, protein: { type: 'NUMBER', nullable: true },
+        fat: { type: 'NUMBER', nullable: true }, carbs: { type: 'NUMBER', nullable: true },
+        sugar: { type: 'NUMBER', nullable: true }, fiber: { type: 'NUMBER', nullable: true },
+        salt: { type: 'NUMBER', nullable: true }, per_100g: { type: 'BOOLEAN', nullable: true },
+      },
+    },
   },
   required: ['is_recipe', 'title', 'ingredients', 'steps'],
 };
 
-export function aiPrompt(meta: VideoMeta, withVideo: boolean): string {
+export type AiSource = 'video' | 'text' | 'images';
+
+const AI_INTRO: Record<AiSource, string> = {
+  video: 'Du bekommst ein Kochvideo samt Titel und Beschreibung. Schau dir das ganze Video an (Bild, Ton und eingeblendete Texte) und schreibe das Rezept auf.',
+  text: 'Du bekommst Titel und Beschreibung eines Kochvideos. Schreibe das Rezept auf, das darin steht.',
+  images: 'Du bekommst ein oder mehrere Fotos eines Rezepts, z. B. Seiten aus einem Kochbuch oder eine handschriftliche Rezeptkarte. Lies das Rezept vollständig ab (auch Handschrift; mehrere Fotos gehören zu einem Rezept) und schreibe es auf.',
+};
+
+export function aiPrompt(meta: VideoMeta | null, source: AiSource): string {
   return [
-    withVideo
-      ? 'Du bekommst ein Kochvideo samt Titel und Beschreibung. Schau dir das ganze Video an (Bild, Ton und eingeblendete Texte) und schreibe das Rezept auf.'
-      : 'Du bekommst Titel und Beschreibung eines Kochvideos. Schreibe das Rezept auf, das darin steht.',
+    AI_INTRO[source],
     'Regeln:',
     '- Alles auf Deutsch. Titel kurz und ohne Emojis oder Hashtags. Beschreibung höchstens zwei Sätze.',
-    '- Zutaten: eine pro Eintrag, Menge zuerst, metrische Einheiten (z. B. "200 g Mehl", "1 EL Olivenöl", "2 Knoblauchzehen", "Salz"). Nur Mengen nennen, die im Video oder Text vorkommen; nichts erfinden.',
-    '- Schritte: in der Reihenfolge des Videos, jeweils ein bis drei kurze Sätze, keine Nummerierung.',
-    withVideo
+    '- Zutaten: eine pro Eintrag, Menge zuerst, metrische Einheiten (z. B. "200 g Mehl", "1 EL Olivenöl", "2 Knoblauchzehen", "Salz"). Zusätze wie die Mehlsorte in Klammern dahinter ("200 g Mehl (Type 405)"). Nur Mengen nennen, die vorkommen; nichts erfinden.',
+    source === 'images'
+      ? '- Schritte: in der Reihenfolge der Vorlage, jeweils ein bis drei kurze Sätze, keine Nummerierung. Unleserliches nicht raten, sondern mit "[unleserlich]" kennzeichnen.'
+      : '- Schritte: in der Reihenfolge des Videos, jeweils ein bis drei kurze Sätze, keine Nummerierung.',
+    source === 'video'
       ? '- start: Zeitpunkt im Video im Format M:SS, an dem der Schritt beginnt. Wenn unklar, null.'
       : '- start: immer null.',
     '- servings, total_minutes, cook_minutes nur, wenn sie genannt werden oder sich klar ergeben, sonst null.',
     '- tags: höchstens fünf kurze deutsche Stichworte (z. B. "vegetarisch", "Pasta", "schnell").',
-    '- notes: Tipps und Varianten aus dem Video, sonst leer.',
+    '- notes: Tipps und Varianten, sonst leer.',
+    '- nutrition: nur, wenn Nährwerte ausdrücklich angegeben sind (kcal und Gramm; per_100g = true, wenn sie für 100 g gelten, sonst pro Portion). Nicht schätzen; sonst null.',
     '- Ist es kein Rezept, setze is_recipe auf false und lass Zutaten und Schritte leer.',
-    '',
-    `Titel: ${meta.title}`,
-    `Beschreibung:\n${meta.description.slice(0, 8000) || '(keine)'}`,
+    ...(meta ? ['', `Titel: ${meta.title}`, `Beschreibung:\n${meta.description.slice(0, 8000) || '(keine)'}`] : []),
   ].join('\n');
 }
 
 const RETRY_STATUS = new Set([404, 429, 500, 503]);
 
 // deno-lint-ignore no-explicit-any
-async function askGemini(key: string, parts: any[]): Promise<Record<string, unknown>> {
+async function askGemini(key: string, parts: any[], lowResolution = true): Promise<Record<string, unknown>> {
   const models = [...new Set([env('GEMINI_MODEL'), 'gemini-flash-latest', 'gemini-2.5-flash'].filter(Boolean))] as string[];
   let lastError = '';
   for (const model of models) {
@@ -409,7 +471,8 @@ async function askGemini(key: string, parts: any[]): Promise<Record<string, unkn
           temperature: 0.2,
           responseMimeType: 'application/json',
           responseSchema: AI_SCHEMA,
-          mediaResolution: 'MEDIA_RESOLUTION_LOW',
+          // Videos in niedriger Auflösung (spart Kontingent); Fotos voll, damit auch Handschrift lesbar ist.
+          ...(lowResolution ? { mediaResolution: 'MEDIA_RESOLUTION_LOW' } : {}),
         },
       }),
       signal: AbortSignal.timeout(110_000),
@@ -452,7 +515,19 @@ export function normalizeAiRecipe(ai: Record<string, unknown>, maxSeconds: numbe
     ingredients: list(ai.ingredients),
     steps,
     notes: str(ai.notes),
+    nutrition: aiNutrition(ai.nutrition),
   };
+}
+
+function aiNutrition(raw: unknown): Nutrition | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const n = raw as Record<string, unknown>;
+  const out: Nutrition = { per: n.per_100g ? '100 g' : 'Portion' };
+  for (const key of ['kcal', 'protein', 'fat', 'carbs', 'sugar', 'fiber', 'salt'] as const) {
+    const v = Number(n[key]);
+    if (n[key] != null && Number.isFinite(v) && v >= 0 && v < 100000) out[key] = key === 'kcal' ? Math.round(v) : Math.round(v * 10) / 10;
+  }
+  return Object.keys(out).length > 1 ? out : null;
 }
 
 async function importVideo(video: VideoRef, url: string) {
@@ -475,7 +550,7 @@ async function importVideo(video: VideoRef, url: string) {
       try {
         const parts = [
           ...(withVideo ? [{ file_data: { file_uri: `https://www.youtube.com/watch?v=${video.id}` } }] : []),
-          { text: aiPrompt(meta, withVideo) },
+          { text: aiPrompt(meta, withVideo ? 'video' : 'text') },
         ];
         ai = normalizeAiRecipe(await askGemini(key, parts), meta.seconds, withVideo);
         break;
@@ -499,6 +574,7 @@ async function importVideo(video: VideoRef, url: string) {
     steps: found ? ai!.steps : [],
     // Ohne Rezept aus der KI wenigstens die Video-Beschreibung als Notiz übernehmen.
     notes: found ? ai!.notes : meta.description.slice(0, 4000),
+    nutrition: found ? ai!.nutrition : null,
     structured: Boolean(found),
     source,
     image,
@@ -506,6 +582,55 @@ async function importVideo(video: VideoRef, url: string) {
     ai: !key ? 'none' : ai ? 'ok' : 'failed',
     ...(ai ? {} : aiError ? { ai_error: aiError } : {}),
   };
+}
+
+const MAX_PHOTOS = 6;
+const MAX_PHOTO_BYTES = 12_000_000; // Summe der Fotos als Base64
+
+// Prüft die Fotos aus der App: data:-URLs von JPEG, PNG, WebP oder HEIC.
+export function photoParts(images: unknown): { inline_data: { mime_type: string; data: string } }[] | string {
+  if (!Array.isArray(images) || !images.length) return 'Bitte mindestens ein Foto auswählen.';
+  if (images.length > MAX_PHOTOS) return `Bitte höchstens ${MAX_PHOTOS} Fotos auf einmal.`;
+  let total = 0;
+  const parts = [];
+  for (const img of images) {
+    const m = String(img).match(/^data:(image\/(?:jpeg|png|webp|heic|heif));base64,([A-Za-z0-9+/=]+)$/);
+    if (!m) return 'Das Format eines Fotos wird nicht unterstützt.';
+    total += m[2].length;
+    parts.push({ inline_data: { mime_type: m[1], data: m[2] } });
+  }
+  if (total > MAX_PHOTO_BYTES) return 'Die Fotos sind zu groß.';
+  return parts;
+}
+
+async function importPhotos(images: unknown) {
+  const parts = photoParts(images);
+  if (typeof parts === 'string') return json({ error: parts }, 400);
+  const key = env('GEMINI_API_KEY');
+  if (!key) return json({ error: 'Für Fotos fehlt in Supabase das Secret GEMINI_API_KEY.' }, 400);
+  let ai: ReturnType<typeof normalizeAiRecipe>;
+  try {
+    ai = normalizeAiRecipe(await askGemini(key, [...parts, { text: aiPrompt(null, 'images') }], false), null, false);
+  } catch (err) {
+    return json({ error: `Die Fotos konnten nicht ausgewertet werden: ${(err as Error).message}` }, 502);
+  }
+  const found = ai.is_recipe && (ai.ingredients.length > 0 || ai.steps.length > 0);
+  return json({
+    title: ai.title,
+    description: found ? ai.description : '',
+    tags: found ? ai.tags : [],
+    servings: found ? ai.servings : null,
+    total_minutes: found ? ai.total_minutes : null,
+    cook_minutes: found ? ai.cook_minutes : null,
+    ingredients: found ? ai.ingredients : [],
+    steps: found ? ai.steps : [],
+    notes: found ? ai.notes : '',
+    nutrition: found ? ai.nutrition : null,
+    structured: found,
+    source: '',
+    image: null,
+    photos: true,
+  });
 }
 
 async function readLimited(res: Response, limit: number): Promise<Uint8Array> {
@@ -576,7 +701,9 @@ async function handle(req: Request): Promise<Response> {
 
   let url: string;
   try {
-    url = String((await req.json()).url ?? '').trim();
+    const body = await req.json();
+    if (body.images) return await importPhotos(body.images);
+    url = String(body.url ?? '').trim();
   } catch {
     return json({ error: 'Ungültige Anfrage.' }, 400);
   }

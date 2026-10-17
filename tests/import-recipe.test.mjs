@@ -83,3 +83,31 @@ test('echtes Chefkoch-Bananenbrot: Tipps in die Notizen, kein Schritt „Zuberei
   assert.match(r.notes, /^Tipps und Varianten von der Rezeptautorin:\n- In einer Dose/);
   assert.match(r.notes, /\n- Ich backe es/);
 });
+
+test('liest Nährwerte aus schema.org', async () => {
+  const { parseNutrition } = await import('../supabase/functions/import-recipe/index.ts');
+  assert.deepEqual(parseNutrition({
+    '@type': 'NutritionInformation', servingSize: '1', calories: '542 kcal',
+    proteinContent: '25,42g', fatContent: '27,71 g', carbohydrateContent: '46,65g',
+  }), { per: 'Portion', kcal: 542, protein: 25.4, fat: 27.7, carbs: 46.7 });
+  assert.deepEqual(parseNutrition({ servingSize: '100 g', calories: '1000 kJ', sodiumContent: '400 mg' }),
+    { per: '100 g', kcal: 239, salt: 1 });
+  assert.equal(parseNutrition({ servingSize: '1' }), null);
+  assert.equal(parseNutrition('550 kcal'), null);
+});
+
+test('Rezept-Seiten liefern Nährwerte mit', () => {
+  const html = `<script type="application/ld+json">{"@type":"Recipe","name":"Suppe","recipeIngredient":["1 l Wasser"],
+    "nutrition":{"@type":"NutritionInformation","calories":"120 kcal","fatContent":"3 g"}}</script>`;
+  assert.deepEqual(extractRecipe(html, 'https://x.de/suppe').nutrition, { per: 'Portion', kcal: 120, fat: 3 });
+});
+
+test('prüft Fotos für den Import', async () => {
+  const { photoParts, aiPrompt } = await import('../supabase/functions/import-recipe/index.ts');
+  assert.deepEqual(photoParts(['data:image/jpeg;base64,AAAA']), [{ inline_data: { mime_type: 'image/jpeg', data: 'AAAA' } }]);
+  assert.equal(typeof photoParts([]), 'string');
+  assert.equal(typeof photoParts(['data:text/html;base64,AAAA']), 'string');
+  assert.equal(typeof photoParts(Array(7).fill('data:image/png;base64,AA')), 'string');
+  assert.match(aiPrompt(null, 'images'), /handschriftlich/);
+  assert.doesNotMatch(aiPrompt(null, 'images'), /Titel:/);
+});

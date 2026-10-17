@@ -807,6 +807,9 @@ function showRecipe(r, { own, back, backLabel, from = '' }) {
     return `<li>${t != null ? `<button type="button" class="seek" data-t="${t}" aria-label="Video ab ${formatTime(t)} abspielen">▶ ${formatTime(t)}</button> ` : ''}${esc(stepText(s))}</li>`;
   }).join('')}</ol></section>` : ''}
 
+      ${hasNutrition(r.nutrition) ? `<section><h2>Nährwerte <small class="hint">${r.nutrition.per === '100 g' ? 'pro 100 g' : 'pro Portion'}</small></h2>
+        <dl class="nutrition">${NUTRIENTS.filter(([k]) => r.nutrition[k] != null).map(([k, label, unit]) => `<div><dt>${label}</dt><dd>${formatNutrient(r.nutrition[k])} ${unit}</dd></div>`).join('')}</dl></section>` : ''}
+
       ${r.notes ? `<section><h2>Notizen</h2><p class="notes">${esc(r.notes)}</p></section>` : ''}
 
       ${sources.length ? `<section><h2>Quellen</h2><ul class="sources">
@@ -891,6 +894,13 @@ function showRecipe(r, { own, back, backLabel, from = '' }) {
   };
 }
 
+const NUTRIENTS = [
+  ['kcal', 'Kalorien', 'kcal'], ['protein', 'Eiweiß', 'g'], ['fat', 'Fett', 'g'], ['carbs', 'Kohlenhydrate', 'g'],
+  ['sugar', 'davon Zucker', 'g'], ['fiber', 'Ballaststoffe', 'g'], ['salt', 'Salz', 'g'],
+];
+const hasNutrition = (n) => Boolean(n) && NUTRIENTS.some(([k]) => n[k] != null);
+const formatNutrient = (v) => String(v).replace('.', ',');
+
 // Erzeugt bei Bedarf einen Teilen-Link und öffnet das Teilen-Menü. Liefert true bei Erfolg.
 async function shareRecipe(r) {
   try {
@@ -950,8 +960,12 @@ async function renderEditor(id) {
             <input type="url" id="import-url" inputmode="url" placeholder="https://www.chefkoch.de/rezepte/…" autocomplete="off">
             <button type="button" class="btn primary" id="import-btn">Importieren</button>
           </div>
-          <small>Liest Titel, Zutaten, Zubereitung, Zeiten und Bild aus, auch aus Videos von YouTube und TikTok. Danach kannst du alles anpassen.</small>
+          <small>Liest Titel, Zutaten, Zubereitung, Zeiten, Nährwerte und Bild aus, auch aus Videos von YouTube und TikTok. Danach kannst du alles anpassen.</small>
         </label>
+        <div class="import-photo">
+          <label class="btn" id="import-photo-btn">📷 Aus Fotos<input type="file" id="import-photos" accept="image/*" multiple hidden></label>
+          <small>Kochbuchseite oder Rezeptkarte fotografieren, gedruckt oder handschriftlich (bis zu 6 Fotos).</small>
+        </div>
         <p class="hint" id="import-msg" role="status"></p>
       </div>`}
 
@@ -972,6 +986,15 @@ async function renderEditor(id) {
         <label>Gesamtzeit (Min.) <input name="total_minutes" type="number" min="0" inputmode="numeric" value="${r.total_minutes ?? ''}"></label>
         <label>Koch-/Backzeit (Min.) <input name="cook_minutes" type="number" min="0" inputmode="numeric" value="${r.cook_minutes ?? ''}"></label>
       </div>
+
+      <details class="nutrition-edit"${hasNutrition(r.nutrition) ? ' open' : ''}>
+        <summary>Nährwerte</summary>
+        <label class="nutrition-per">Angaben <select name="nutrition_per">
+          <option value="Portion"${r.nutrition?.per !== '100 g' ? ' selected' : ''}>pro Portion</option>
+          <option value="100 g"${r.nutrition?.per === '100 g' ? ' selected' : ''}>pro 100 g</option></select></label>
+        <div class="nutrition-grid">${NUTRIENTS.map(([k, label, unit]) => `<label>${label} (${unit})
+          <input name="n_${k}" type="number" min="0" step="any" inputmode="decimal" value="${r.nutrition?.[k] ?? ''}"></label>`).join('')}</div>
+      </details>
 
       <label>Zutaten <textarea name="ingredients" rows="8" placeholder="200 g Mehl&#10;2 Eier&#10;1 Prise Salz">${esc(r.ingredients.map(ingredientToLine).join('\n'))}</textarea>
         <small>Eine Zutat pro Zeile, Menge zuerst. Die Menge bezieht sich auf die Personenzahl oben.</small></label>
@@ -1090,7 +1113,12 @@ async function renderEditor(id) {
   };
   drawSteps();
 
-  if (!existing) setupImport(form, { setTags, setSteps, addImage: (file) => { newFiles.push({ file, preview: URL.createObjectURL(file) }); drawThumbs(); }, drawPreview });
+  const setNutrition = (n) => {
+    form.nutrition_per.value = n.per === '100 g' ? '100 g' : 'Portion';
+    NUTRIENTS.forEach(([k]) => { form[`n_${k}`].value = n[k] ?? ''; });
+    $('.nutrition-edit').open = true;
+  };
+  if (!existing) setupImport(form, { setTags, setSteps, addImage: (file) => { newFiles.push({ file, preview: URL.createObjectURL(file) }); drawThumbs(); }, drawPreview, setNutrition });
 
   form.onsubmit = async (e) => {
     e.preventDefault();
@@ -1124,6 +1152,14 @@ async function renderEditor(id) {
         notes: form.notes.value.trim(),
         images: [...keptImages, ...uploaded],
       };
+      const nutrition = { per: form.nutrition_per.value };
+      NUTRIENTS.forEach(([k]) => {
+        const v = form[`n_${k}`].value;
+        if (v !== '' && Number(v) >= 0) nutrition[k] = Number(v);
+      });
+      // Die Spalte gibt es erst nach naehrwerte.sql; ohne Nährwerte wird sie deshalb nicht mitgeschickt.
+      if (hasNutrition(nutrition)) row.nutrition = nutrition;
+      else if (existing?.nutrition) row.nutrition = null;
       const { data, error } = await supabase.from('recipes').upsert(row).select().single();
       if (error) throw error;
       await rememberCategories(row.ingredients.map((i) => i.name));
@@ -1756,6 +1792,7 @@ async function copyRecipe(r, button) {
       sources: r.sources,
       notes: r.notes,
       images: uploaded,
+      ...(hasNutrition(r.nutrition) ? { nutrition: r.nutrition } : {}),
     };
     const { data, error } = await supabase.from('recipes').insert(row).select().single();
     if (error) throw error;
@@ -1974,6 +2011,11 @@ async function renderCookbookRecipe(ownerId, recipeId) {
 }
 
 function importMessage(data) {
+  if (data.photos) {
+    return data.ingredients?.length || data.steps?.length
+      ? 'Vom Foto übernommen. Die KI kann sich verlesen, besonders bei Handschrift: Prüfe alles, dann tippe auf Speichern.'
+      : 'Auf den Fotos wurde kein Rezept erkannt. Versuche es mit einem schärferen, hellen Foto.';
+  }
   if (data.ingredients?.length) {
     return data.video
       ? 'Aus dem Video übernommen. Die KI kann sich irren: Prüfe Mengen, Schritte und Zeitstempel, dann tippe auf Speichern.'
@@ -1987,55 +2029,97 @@ function importMessage(data) {
 
 // Import per Link: die Edge Function "import-recipe" lädt die Seite und liest das Rezept aus.
 // Bei Videos (YouTube, TikTok) wertet sie das Video mit Gemini aus.
-function setupImport(form, { setTags, setSteps, addImage, drawPreview }) {
+function setupImport(form, { setTags, setSteps, addImage, drawPreview, setNutrition }) {
   const input = $('#import-url');
   const btn = $('#import-btn');
+  const photoInput = $('#import-photos');
+  const photoBtn = $('#import-photo-btn');
   const msg = $('#import-msg');
+
+  const busy = (on) => {
+    btn.disabled = on;
+    photoBtn.classList.toggle('disabled', on);
+    photoInput.disabled = on;
+    btn.textContent = on ? 'Lade …' : 'Importieren';
+  };
+
+  const invoke = async (body) => {
+    const { data, error } = await supabase.functions.invoke('import-recipe', { body });
+    if (error) {
+      let detail = error.message;
+      const status = error.context?.status;
+      try { detail = (await error.context.json()).error || detail; } catch { /* keine JSON-Antwort */ }
+      if (status === 404) detail = 'Die Import-Funktion ist in Supabase noch nicht eingerichtet (siehe README).';
+      throw new Error(detail);
+    }
+    return data;
+  };
+
+  const fill = async (data) => {
+    if (data.title) form.title.value = data.title;
+    if (data.description) form.description.value = data.description;
+    if (data.tags?.length) setTags(data.tags);
+    if (data.servings) form.servings.value = data.servings;
+    if (data.total_minutes != null) form.total_minutes.value = data.total_minutes;
+    if (data.cook_minutes != null) form.cook_minutes.value = data.cook_minutes;
+    if (data.ingredients?.length) form.ingredients.value = data.ingredients.join('\n');
+    if (data.steps?.length) setSteps(data.steps);
+    if (data.nutrition) setNutrition(data.nutrition);
+    if (data.notes) form.notes.value = [form.notes.value.trim(), data.notes].filter(Boolean).join('\n\n');
+    const sources = form.sources.value.split('\n').map((s) => s.trim()).filter(Boolean);
+    if (data.source && !sources.includes(data.source)) form.sources.value = [...sources, data.source].join('\n');
+    if (data.video) setSteps(data.steps ?? []); // Zeitstempel-Felder erscheinen erst mit dem Video-Link
+    if (data.image) {
+      const blob = await (await fetch(data.image)).blob();
+      addImage(new File([blob], 'import.jpg', { type: blob.type }));
+    }
+    drawPreview();
+    msg.textContent = importMessage(data);
+  };
 
   const run = async () => {
     const url = input.value.trim();
     if (!safeUrl(url)) { msg.textContent = 'Bitte einen vollständigen Link (https://…) einfügen.'; return; }
-    btn.disabled = true;
-    btn.textContent = 'Lade …';
+    busy(true);
     msg.textContent = videoOf([url]) || /tiktok\.com/i.test(url)
       ? 'Das Video wird ausgewertet. Das kann bis zu einer Minute dauern …' : '';
     try {
-      const { data, error } = await supabase.functions.invoke('import-recipe', { body: { url } });
-      if (error) {
-        let detail = error.message;
-        const status = error.context?.status;
-        try { detail = (await error.context.json()).error || detail; } catch { /* keine JSON-Antwort */ }
-        if (status === 404) detail = 'Die Import-Funktion ist in Supabase noch nicht eingerichtet (siehe README).';
-        throw new Error(detail);
-      }
-      if (data.title) form.title.value = data.title;
-      if (data.description) form.description.value = data.description;
-      if (data.tags?.length) setTags(data.tags);
-      if (data.servings) form.servings.value = data.servings;
-      if (data.total_minutes != null) form.total_minutes.value = data.total_minutes;
-      if (data.cook_minutes != null) form.cook_minutes.value = data.cook_minutes;
-      if (data.ingredients?.length) form.ingredients.value = data.ingredients.join('\n');
-      if (data.steps?.length) setSteps(data.steps);
-      if (data.notes) form.notes.value = [form.notes.value.trim(), data.notes].filter(Boolean).join('\n\n');
-      const sources = form.sources.value.split('\n').map((s) => s.trim()).filter(Boolean);
-      if (!sources.includes(data.source)) form.sources.value = [...sources, data.source].join('\n');
-      if (data.video) setSteps(data.steps ?? []); // Zeitstempel-Felder erscheinen erst mit dem Video-Link
-      if (data.image) {
-        const blob = await (await fetch(data.image)).blob();
-        addImage(new File([blob], 'import.jpg', { type: blob.type }));
-      }
-      drawPreview();
-      msg.textContent = importMessage(data);
+      await fill(await invoke({ url }));
       input.value = '';
     } catch (err) {
       msg.textContent = `Import fehlgeschlagen: ${err.message}`;
     } finally {
-      btn.disabled = false;
-      btn.textContent = 'Importieren';
+      busy(false);
     }
   };
   btn.onclick = run;
   input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); run(); } };
+
+  // Fotos von Kochbuchseiten oder Rezeptkarten: verkleinert an die Edge Function, Gemini liest sie ab.
+  photoInput.onchange = async () => {
+    const files = [...photoInput.files].slice(0, 6);
+    photoInput.value = '';
+    if (!files.length) return;
+    busy(true);
+    msg.textContent = `${files.length === 1 ? 'Das Foto wird' : `${files.length} Fotos werden`} ausgewertet. Das kann bis zu einer Minute dauern …`;
+    try {
+      const images = await Promise.all(files.map(async (f) => blobToDataUrl(await compressImage(f, 2000, 0.85))));
+      await fill(await invoke({ images }));
+    } catch (err) {
+      msg.textContent = `Import fehlgeschlagen: ${err.message}`;
+    } finally {
+      busy(false);
+    }
+  };
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
 }
 
 // ---------- Start ----------

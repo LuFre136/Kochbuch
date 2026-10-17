@@ -408,3 +408,17 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 0.35); }
 .swipe-btn.accent { background: var(--accent); color: var(--accent-text); }
 .swipe-btn.danger { background: var(--danger); color: #fff; }
 .list-settings[hidden] { display: none; }
+
+.import-photo { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.import-photo small { color: var(--muted); }
+.import-photo .btn { flex: none; }
+.import-photo .btn.disabled { opacity: 0.5; pointer-events: none; }
+.nutrition-edit { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; }
+.nutrition-edit summary { font-weight: 600; cursor: pointer; }
+.nutrition-edit[open] summary { margin-bottom: 10px; }
+.nutrition-per { margin-bottom: 10px; }
+.nutrition-per select { display: block; width: 100%; min-height: 44px; margin-top: 4px; padding: 0 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
+.nutrition-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); gap: 10px; }
+.nutrition { display: grid; grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr)); gap: 10px 16px; margin: 0; }
+.nutrition dt { color: var(--muted); font-size: 0.85rem; }
+.nutrition dd { margin: 0; font-weight: 600; }

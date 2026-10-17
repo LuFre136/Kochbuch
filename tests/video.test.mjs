@@ -101,7 +101,7 @@ test('wandelt die Gemini-Antwort in ein Rezept um', () => {
 
 test('der Prompt enthält Titel, Beschreibung und die passende Zeitstempel-Regel', () => {
   const meta = { title: 'Pasta', description: 'Zutaten: 250 g Nudeln', tags: [], thumbnail: null, seconds: null };
-  assert.match(fn.aiPrompt(meta, true), /M:SS/);
-  assert.match(fn.aiPrompt(meta, false), /start: immer null/);
-  assert.match(fn.aiPrompt(meta, false), /250 g Nudeln/);
+  assert.match(fn.aiPrompt(meta, 'video'), /M:SS/);
+  assert.match(fn.aiPrompt(meta, 'text'), /start: immer null/);
+  assert.match(fn.aiPrompt(meta, 'text'), /250 g Nudeln/);
 });
