@@ -1112,8 +1112,21 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
     const frame = $('#video');
     if (!frame || !entry?.video) return;
     frame.addEventListener('load', () => {
-      askPlayerState(frame, entry.video);
-      if (seconds != null) seekTo(frame, entry.video, seconds);
+      // Die Bitte wird wiederholt, bis sich der Player meldet: direkt nach dem Laden ist
+      // sein Innenleben manchmal noch nicht bereit, und dann geht die erste verloren.
+      let tries = 0;
+      const ask = () => {
+        if (playerReady || tries >= 12 || $('#video') !== frame) return;
+        tries += 1;
+        askPlayerState(frame, entry.video);
+        setTimeout(ask, 250);
+      };
+      ask();
+      // Nach dem Laden mit Startzeit noch einmal anspringen, falls autoplay nichts tut.
+      if (seconds != null) {
+        seekTo(frame, entry.video, seconds);
+        setTimeout(() => { if ($('#video') === frame) seekTo(frame, entry.video, seconds); }, 700);
+      }
     }, { once: true });
   };
   if (shown?.video) watchPlayer(shown);
