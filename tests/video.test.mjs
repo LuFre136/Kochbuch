@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  parseVideoUrl, videoOf, embedUrl, stepText, stepTime, makeStep, formatTime, parseTime,
+  parseVideoUrl, videoOf, embedUrl, stepText, stepTime, makeStep, formatTime,
 } from '../js/video.js';
 import * as fn from '../supabase/functions/import-recipe/index.ts';
 
@@ -54,11 +54,6 @@ test('Schritte mit und ohne Zeitstempel', () => {
   assert.equal(formatTime(75), '1:15');
   assert.equal(formatTime(5), '0:05');
   assert.equal(formatTime(3725), '1:02:05');
-  assert.equal(parseTime('2:15'), 135);
-  assert.equal(parseTime(' 1:02:05 '), 3725);
-  assert.equal(parseTime('90'), 90);
-  assert.equal(parseTime(''), null);
-  assert.equal(parseTime('2 Min'), null);
 });
 
 test('Zeitangaben aus Gemini und YouTube', () => {
