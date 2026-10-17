@@ -2711,14 +2711,19 @@ function importMessage(data) {
       : 'Im Text wurde kein Rezept erkannt.';
   }
   if (data.ingredients?.length) {
-    return data.video
-      ? 'Aus dem Video übernommen. Die KI kann sich irren: Prüfe Mengen, Schritte und Zeitstempel, dann tippe auf Speichern.'
-      : 'Importiert. Prüfe die Angaben und tippe auf Speichern.';
+    if (!data.video) return 'Importiert. Prüfe die Angaben und tippe auf Speichern.';
+    // ai_from sagt, woraus das Rezept kommt; bei TikTok sind das die Untertitel oder die Bilder.
+    const from = {
+      subtitles: 'Aus den Untertiteln des TikToks übernommen. Prüfe Mengen, Schritte und Zeitstempel, dann tippe auf Speichern.',
+      photos: 'Aus den Bildern des TikToks übernommen. Prüfe Mengen und Schritte, dann tippe auf Speichern.',
+      description: 'Aus dem Text zum Video übernommen. Prüfe Mengen und Schritte, dann tippe auf Speichern.',
+    }[data.ai_from];
+    return from ?? 'Aus dem Video übernommen. Die KI kann sich irren: Prüfe Mengen, Schritte und Zeitstempel, dann tippe auf Speichern.';
   }
   if (!data.video) return 'Auf dieser Seite wurden keine Rezeptdaten gefunden. Titel und Bild sind übernommen, den Rest bitte selbst ergänzen.';
   if (data.ai === 'none') return 'Video übernommen. Für Zutaten und Schritte fehlt in Supabase noch das Secret GEMINI_API_KEY (siehe README).';
   if (data.ai === 'failed') return `Video übernommen, aber die Auswertung hat nicht geklappt${data.ai_error ? ` (${data.ai_error})` : ''}. Die Videobeschreibung steht in den Notizen.`;
-  if (data.video.provider === 'tiktok') return 'Im Text zum TikTok steht kein Rezept. Tippe in TikTok auf „Teilen“ → „Video speichern“ und lade das Video hier mit „🎬 Aus Video“ hoch. Titel, Bild und Link sind schon übernommen.';
+  if (data.video.provider === 'tiktok') return 'In Untertiteln, Bildern und Text zum TikTok steht kein Rezept. Tippe in TikTok auf „Teilen“ → „Video speichern“ und lade das Video hier mit „🎬 Aus Video“ hoch. Titel, Bild und Link sind schon übernommen.';
   return 'Im Video wurde kein Rezept gefunden. Titel, Bild und Link sind übernommen, den Rest bitte selbst ergänzen.';
 }
 

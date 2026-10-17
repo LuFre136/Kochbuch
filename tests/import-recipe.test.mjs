@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import {
   extractRecipe, parseDuration, parseYield, isAllowedUrl, splitNotes,
 } from '../supabase/functions/import-recipe/index.ts';
+import * as fn from '../supabase/functions/import-recipe/index.ts';
 
 const fixture = (name) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
 
@@ -148,4 +149,98 @@ test('hochgeladene Videos und eingefügter Text', async () => {
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+// ---------- TikTok: Untertitel und Foto-Posts ----------
+
+const tiktokPage = (payload, id = '__UNIVERSAL_DATA_FOR_REHYDRATION__') =>
+  `<!doctype html><html><head><title>TikTok</title></head><body>
+   <script id="${id}" type="application/json">${JSON.stringify(payload)}</script></body></html>`;
+
+test('liest Untertitel und Dauer aus der TikTok-Seite', () => {
+  const html = tiktokPage({
+    __DEFAULT_SCOPE__: {
+      'webapp.video-detail': {
+        itemInfo: {
+          itemStruct: {
+            id: '7234567890123456789',
+            desc: 'Bester Nudelauflauf #pasta',
+            video: {
+              duration: 42,
+              subtitleInfos: [
+                { LanguageCodeName: 'eng-US', Format: 'webvtt', Url: 'https://v16-webapp.tiktok.com/sub/eng.vtt' },
+                { LanguageCodeName: 'deu-DE', Format: 'webvtt', Url: 'https://v16-webapp.tiktok.com/sub/deu.vtt' },
+                { LanguageCodeName: 'deu-DE', Format: 'creator_caption', Url: 'https://v16-webapp.tiktok.com/sub/deu.json' },
+              ],
+            },
+          },
+        },
+      },
+    },
+  });
+  const post = fn.parseTikTokPage(html);
+  assert.equal(post.caption, 'Bester Nudelauflauf #pasta');
+  assert.equal(post.seconds, 42);
+  assert.deepEqual(post.subtitles.map((x) => x.language), ['eng-US', 'deu-DE']); // creator_caption fällt weg
+  // Deutsch wird bevorzugt.
+  assert.equal(fn.pickSubtitle(post.subtitles), 'https://v16-webapp.tiktok.com/sub/deu.vtt');
+  assert.deepEqual(post.images, []);
+});
+
+test('liest die Bilder eines TikTok-Foto-Posts, auch aus dem älteren SIGI_STATE', () => {
+  const post = fn.parseTikTokPage(tiktokPage({
+    ItemModule: {
+      7234567890123456789: {
+        desc: 'Rezept in den Bildern',
+        video: { duration: 0 },
+        imagePost: {
+          images: [
+            { imageURL: { urlList: ['https://p16-sign.tiktokcdn.com/a.jpeg', 'https://p16-sign.tiktokcdn.com/a-2.jpeg'] } },
+            { imageURL: { urlList: ['https://p16-sign.tiktokcdn.com/b.jpeg'] } },
+          ],
+        },
+      },
+    },
+  }, 'SIGI_STATE'));
+  // Je Bild nur die erste Adresse.
+  assert.deepEqual(post.images, ['https://p16-sign.tiktokcdn.com/a.jpeg', 'https://p16-sign.tiktokcdn.com/b.jpeg']);
+  assert.equal(post.caption, 'Rezept in den Bildern');
+});
+
+test('ohne verwertbares JSON gibt die TikTok-Seite nichts her', () => {
+  assert.equal(fn.parseTikTokPage('<html><body>Bitte anmelden</body></html>'), null);
+  assert.equal(fn.parseTikTokPage(tiktokPage({ ItemModule: {} })), null);
+  assert.equal(fn.parseTikTokPage('<script id="SIGI_STATE" type="application/json">kein json</script>'), null);
+});
+
+test('macht aus WebVTT Zeilen mit Zeitangabe', () => {
+  const vtt = `WEBVTT
+
+1
+00:00:02.000 --> 00:00:05.000
+Zuerst <b>200 g Mehl</b> abwiegen.
+
+2
+00:00:05.000 --> 00:00:07.500
+Zuerst 200 g Mehl abwiegen.
+
+3
+00:01:12.300 --> 00:01:15.000
+Dann die Zwiebeln
+anbraten.
+`;
+  assert.deepEqual(fn.subtitlesToLines(vtt), [
+    '0:02 Zuerst 200 g Mehl abwiegen.', // Wiederholung fällt weg
+    '1:12 Dann die Zwiebeln anbraten.',
+  ]);
+  assert.deepEqual(fn.subtitlesToLines('WEBVTT\n\n'), []);
+  // Auch das kurze Format ohne Stunden.
+  assert.deepEqual(fn.subtitlesToLines('WEBVTT\n\n00:09.000 --> 00:11.000\nSalzen.\n'), ['0:09 Salzen.']);
+});
+
+test('die Anweisung für Untertitel verlangt Zeitstempel aus den Zeilen', () => {
+  const meta = { title: 'Nudelauflauf', description: 'lecker', tags: [], thumbnail: null, seconds: 42 };
+  const prompt = fn.aiPrompt(meta, 'subtitles');
+  assert.match(prompt, /Untertitel eines Kochvideos/);
+  assert.match(prompt, /- start: die Zeit vom Anfang der Untertitel-Zeile/);
 });
