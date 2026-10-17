@@ -11,7 +11,7 @@ import { CATEGORIES, guessCategory, categoryKey, categoryRank } from './categori
 import { DEFAULT_PLACES, guessPlaces } from './places.js';
 import { linkify } from './links.js';
 import {
-  videoOf, videosOf, videoKey, embedUrl, seekTo, askPlayerState, playerState, stepText, stepTime, stepVideo,
+  videoOf, videosOf, videoKey, embedUrl, seekTo, askPlayerState, isPlayerMessage, stepText, stepTime, stepVideo,
   dropMissingTimes, makeStep, formatTime,
 } from './video.js';
 import {
@@ -869,15 +869,15 @@ function enableRecipeSwipe(el, go) {
   el.addEventListener('pointercancel', stop);
 }
 
-// Ob das Video oben gerade läuft. Ein Player, der noch nicht gestartet wurde, nimmt keine
-// Sprungbefehle an — dann wird er für einen Zeitstempel mit der Startzeit neu geladen.
-// Der Zustand kommt aus den Nachrichten des Players (siehe askPlayerState).
-let playerPlaying = false;
+// Ob der Player oben auf Befehle reagiert. Er meldet sich, nachdem er darum gebeten wurde
+// (askPlayerState); dann nimmt er auch ein seekTo an und spielt ab der Stelle, selbst wenn
+// er noch nicht gestartet wurde. Meldet er sich nicht, wird für einen Zeitstempel mit der
+// Startzeit neu geladen.
+let playerReady = false;
 window.addEventListener('message', (e) => {
   const frame = document.querySelector('#video');
   if (!frame || e.source !== frame.contentWindow) return;
-  const state = playerState(e.data);
-  if (state) playerPlaying = state === 'playing';
+  if (isPlayerMessage(e.data)) playerReady = true;
 });
 
 // Einmaliger Hinweis, dass zwischen den Alternativen gewischt werden kann. Er geht weg,
@@ -1105,23 +1105,23 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
   };
   bindGallery();
 
-  // Bittet den geladenen Player, seinen Zustand zu melden. TikTok kennt keine Startzeit in
-  // der Adresse und springt deshalb erst nach dem Laden.
+  // Bittet den geladenen Player, sich zu melden, und springt an die gewünschte Stelle:
+  // TikTok kennt keine Startzeit in der Adresse, und bei YouTube hilft der Befehl, wenn die
+  // Wiedergabe trotz autoplay nicht von selbst anläuft.
   const watchPlayer = (entry, seconds = null) => {
     const frame = $('#video');
     if (!frame || !entry?.video) return;
     frame.addEventListener('load', () => {
       askPlayerState(frame, entry.video);
-      if (seconds != null && entry.video.provider !== 'youtube') seekTo(frame, entry.video, seconds);
+      if (seconds != null) seekTo(frame, entry.video, seconds);
     }, { once: true });
   };
   if (shown?.video) watchPlayer(shown);
 
-  // Zeigt ein Video oder die Bilder. Läuft das Video gerade, springt der Player an die
-  // Stelle; sonst wird es mit der Startzeit neu geladen und spielt von dort an — ein noch
-  // nicht gestarteter Player nimmt keine Sprungbefehle an.
+  // Zeigt ein Video oder die Bilder. Reagiert der Player, springt er an die Stelle und
+  // spielt von dort; sonst wird das Video mit der Startzeit neu geladen.
   const mountMedia = (entry, seconds = null) => {
-    playerPlaying = false;
+    playerReady = false;
     const box = $('#media-box');
     box.innerHTML = mediaHtml(entry, seconds);
     if (!entry.video) { bindGallery(); return; }
@@ -1134,8 +1134,9 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
     box.scrollIntoView({ behavior: 'smooth', block: 'start' });
     const same = next.key === shown.key;
     if (same && (!next.video || seconds == null)) return;
-    // Läuft dasselbe Video schon, reicht ein Sprung: die Wiedergabe bricht nicht ab.
-    if (same && playerPlaying) { seekTo($('#video'), next.video, seconds); return; }
+    // Meldet sich der Player, reicht ein Sprung: die Wiedergabe startet an der Stelle, und
+    // ein laufendes Video bricht nicht ab.
+    if (same && playerReady) { seekTo($('#video'), next.video, seconds); return; }
     shown = next;
     mountMedia(next, seconds);
     app.querySelectorAll('#media-tabs [data-media]').forEach((t) => {

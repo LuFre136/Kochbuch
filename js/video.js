@@ -85,21 +85,17 @@ export function askPlayerState(iframe, video) {
   }
 }
 
-// Liest aus einer Nachricht des Players, ob abgespielt wird: 'playing', 'stopped' oder
-// null, wenn die Nachricht nichts über den Zustand sagt. 1 = läuft, 3 = puffert.
-export function playerState(data) {
+// Erkennt eine Nachricht des eingebetteten Players. Meldet er sich (nach askPlayerState),
+// nimmt er auch Befehle an — dann genügt für einen Zeitstempel ein seekTo, selbst wenn das
+// Video noch nicht gestartet wurde. Andere Fenster schicken auch Nachrichten, deshalb
+// zählt nur, was wie eine Player-Nachricht aussieht.
+export function isPlayerMessage(data) {
   let msg = data;
   if (typeof msg === 'string') {
-    try { msg = JSON.parse(msg); } catch { return null; }
+    try { msg = JSON.parse(msg); } catch { return false; }
   }
-  if (!msg || typeof msg !== 'object') return null;
-  const kind = msg.event ?? msg.type;
-  let state = null;
-  if (kind === 'onStateChange') state = msg.info ?? msg.value;
-  else if (kind === 'infoDelivery') state = msg.info?.playerState;
-  if (typeof state === 'string' && state.trim() !== '') state = Number(state);
-  if (typeof state !== 'number' || !Number.isFinite(state)) return null;
-  return state === 1 || state === 3 ? 'playing' : 'stopped';
+  if (!msg || typeof msg !== 'object') return false;
+  return typeof (msg.event ?? msg.type) === 'string';
 }
 
 // Ein Schritt ist entweder ein Text (alte Rezepte) oder { text, t, v }: t = Sekunden im
