@@ -149,6 +149,7 @@ span.chip { cursor: default; background: var(--surface-2); }
   border-radius: var(--radius); scroll-snap-align: start;
 }
 .gallery img:only-child { width: 100%; }
+.video-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .video { margin: 0 0 12px; scroll-margin-top: 72px; }
 .video iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: var(--radius); background: #000; }
 .video.vertical iframe { aspect-ratio: 9 / 16; width: auto; max-width: 100%; height: min(70vh, 640px); margin: 0 auto; }

@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  parseVideoUrl, videoOf, embedUrl, stepText, stepTime, makeStep, formatTime,
+  parseVideoUrl, videoOf, videosOf, videoKey, embedUrl, stepText, stepTime, stepVideo,
+  dropMissingTimes, makeStep, formatTime,
 } from '../js/video.js';
 import * as fn from '../supabase/functions/import-recipe/index.ts';
 
@@ -20,7 +21,8 @@ test('erkennt Video-Links in der App', () => {
   assert.equal(parseVideoUrl('https://www.youtube.com/@kanal'), null);
   assert.equal(parseVideoUrl('https://www.youtube.com/watch?v=kurz'), null);
   assert.equal(parseVideoUrl('javascript:alert(1)'), null);
-  assert.deepEqual(videoOf(['https://www.chefkoch.de/x', 'https://youtu.be/dQw4w9WgXcQ']), { provider: 'youtube', id: 'dQw4w9WgXcQ' });
+  assert.deepEqual(videoOf(['https://www.chefkoch.de/x', 'https://youtu.be/dQw4w9WgXcQ']),
+    { provider: 'youtube', id: 'dQw4w9WgXcQ', key: 'youtube:dQw4w9WgXcQ' });
   assert.equal(videoOf([]), null);
 });
 
@@ -41,6 +43,8 @@ test('Einbett-Adressen', () => {
   assert.equal(embedUrl({ provider: 'youtube', id: 'dQw4w9WgXcQ' }, 'https://lufre136.github.io'),
     'https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?enablejsapi=1&playsinline=1&rel=0&origin=https%3A%2F%2Flufre136.github.io');
   assert.match(embedUrl({ provider: 'tiktok', id: '7234567890123456789' }), /^https:\/\/www\.tiktok\.com\/player\/v1\/7234567890123456789\?/);
+  // Bei YouTube steht die Startzeit in der Adresse, TikTok springt erst nach dem Laden.
+  assert.match(embedUrl({ provider: 'youtube', id: 'dQw4w9WgXcQ' }, null, 95), /[?&]start=95&autoplay=1/);
 });
 
 test('Schritte mit und ohne Zeitstempel', () => {
@@ -104,4 +108,43 @@ test('der Prompt enthält Titel, Beschreibung und die passende Zeitstempel-Regel
   assert.match(fn.aiPrompt(meta, 'video'), /M:SS/);
   assert.match(fn.aiPrompt(meta, 'text'), /start: immer null/);
   assert.match(fn.aiPrompt(meta, 'text'), /250 g Nudeln/);
+});
+
+test('sammelt mehrere Videos eines Rezepts ohne Doppelte', () => {
+  const videos = videosOf([
+    'https://www.chefkoch.de/x',
+    'https://youtu.be/dQw4w9WgXcQ',
+    'https://www.youtube.com/watch?v=dQw4w9WgXcQ', // derselbe Clip, anderer Link
+    'https://www.tiktok.com/@koch.max/video/7234567890123456789',
+  ]);
+  assert.deepEqual(videos.map((v) => v.key), ['youtube:dQw4w9WgXcQ', 'tiktok:7234567890123456789']);
+  assert.equal(videoKey(videos[1]), 'tiktok:7234567890123456789');
+  assert.deepEqual(videosOf([]), []);
+});
+
+test('ein Schritt gehört zu dem Video, das an ihm steht', () => {
+  const videos = videosOf(['https://youtu.be/dQw4w9WgXcQ', 'https://www.tiktok.com/@a/video/7234567890123456789']);
+  assert.equal(stepVideo({ text: 'Teig', t: 30, v: 'tiktok:7234567890123456789' }, videos).provider, 'tiktok');
+  // Alte Schritte ohne Angabe gehören zum ersten Video.
+  assert.equal(stepVideo({ text: 'Teig', t: 30 }, videos).provider, 'youtube');
+  assert.equal(stepVideo('Teig ohne Zeit', videos), null);
+  assert.equal(stepVideo({ text: 'Teig', t: 30, v: 'youtube:weg' }, videos), null);
+  assert.equal(stepVideo({ text: 'Teig', t: 30 }, []), null);
+});
+
+test('merkt sich das Video nur mit Zeitstempel', () => {
+  assert.deepEqual(makeStep('Teig', 30, 'youtube:abc'), { text: 'Teig', t: 30, v: 'youtube:abc' });
+  assert.deepEqual(makeStep('Teig', 30), { text: 'Teig', t: 30 });
+  assert.equal(makeStep('Teig', null, 'youtube:abc'), 'Teig');
+});
+
+test('ohne sein Video verliert ein Schritt den Zeitstempel', () => {
+  const videos = videosOf(['https://youtu.be/dQw4w9WgXcQ']);
+  const { steps, dropped } = dropMissingTimes([
+    { text: 'Bleibt', t: 10, v: 'youtube:dQw4w9WgXcQ' },
+    { text: 'Verliert', t: 20, v: 'tiktok:7234567890123456789' },
+    'Ohne Zeit',
+  ], videos);
+  assert.equal(dropped, 1);
+  assert.deepEqual(steps, [{ text: 'Bleibt', t: 10, v: 'youtube:dQw4w9WgXcQ' }, 'Verliert', 'Ohne Zeit']);
 });

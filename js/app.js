@@ -11,7 +11,8 @@ import { CATEGORIES, guessCategory, categoryKey, categoryRank } from './categori
 import { DEFAULT_PLACES, guessPlaces } from './places.js';
 import { linkify } from './links.js';
 import {
-  videoOf, embedUrl, seekTo, stepText, stepTime, makeStep, formatTime,
+  videoOf, videosOf, videoKey, embedUrl, seekTo, stepText, stepTime, stepVideo,
+  dropMissingTimes, makeStep, formatTime,
 } from './video.js';
 import {
   pairOf, alternativeIds, alternativeGroup, suggestAlternatives,
@@ -894,14 +895,18 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
   window.scrollTo(0, 0);
   let servings = r.servings;
   const sources = r.sources.map((u) => [u, safeUrl(u)]).filter(([, href]) => href);
-  const video = videoOf(r.sources);
+  const videos = videosOf(r.sources);
+  // Es läuft immer nur ein Player; bei mehreren Videos schaltet die Leiste darüber um.
+  let shown = videos[0] ?? null;
+  const videoLabel = (v) => (v.provider === 'youtube' ? 'YouTube' : 'TikTok');
 
   app.innerHTML = `
     <article class="recipe">
       ${back ? `<a class="back" href="${back}">← ${esc(backLabel)}</a>` : ''}
       ${from ? `<p class="hint from">${esc(from)}</p>` : ''}
       ${r.images.length ? `<div class="gallery">${r.images.map((p) => `<img src="${esc(imageUrl(p))}" alt="">`).join('')}</div>` : ''}
-      ${video ? `<div class="video${video.vertical ? ' vertical' : ''}"><iframe id="video" src="${esc(embedUrl(video, location.origin))}" title="Video zum Rezept"
+      ${shown ? `${videos.length > 1 ? `<div class="video-tabs" id="video-tabs" role="tablist">${videos.map((v, i) => `<button type="button" class="chip${i === 0 ? ' active' : ''}" data-video="${esc(v.key)}" role="tab" aria-selected="${i === 0}">Video ${i + 1} · ${videoLabel(v)}</button>`).join('')}</div>` : ''}
+      <div class="video${shown.vertical ? ' vertical' : ''}" id="video-box"><iframe id="video" src="${esc(embedUrl(shown, location.origin))}" title="Video zum Rezept"
         allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>` : ''}
       <h1>${esc(r.title)}</h1>
       ${group.length > 1 ? `<nav class="alts" aria-label="Alternativrezepte">
@@ -934,8 +939,12 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
 
       ${r.steps.length ? `<section><h2>Zubereitung</h2>
         <ol class="steps">${r.steps.map((s) => {
-    const t = video ? stepTime(s) : null;
-    return `<li>${t != null ? `<button type="button" class="seek" data-t="${t}" aria-label="Video ab ${formatTime(t)} abspielen">▶ ${formatTime(t)}</button> ` : ''}${esc(stepText(s))}</li>`;
+    const v = stepVideo(s, videos);
+    const t = v ? stepTime(s) : null;
+    // Bei mehreren Videos steht am Zeitstempel, in welchem er liegt.
+    const n = videos.length > 1 ? `${videos.indexOf(v) + 1} · ` : '';
+    return `<li>${t != null ? `<button type="button" class="seek" data-t="${t}" data-video="${esc(v.key)}"
+      aria-label="Video ${videos.length > 1 ? `${videos.indexOf(v) + 1} ` : ''}ab ${formatTime(t)} abspielen">▶ ${n}${formatTime(t)}</button> ` : ''}${esc(stepText(s))}</li>`;
   }).join('')}</ol></section>` : ''}
 
       ${hasNutrition(r.nutrition) ? `<section><h2>Nährwerte <small class="hint">${r.nutrition.per === '100 g' ? 'pro 100 g' : 'pro Portion'}</small></h2>
@@ -984,13 +993,42 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
   });
   drawIngredients();
 
-  // Zeitstempel bei den Schritten: zum Video scrollen und dort an die Stelle springen.
+  // Zeigt ein Video und springt dabei an eine Stelle. Läuft es schon, springt der Player
+  // selbst; sonst wird es neu geladen und springt, sobald es bereit ist.
+  const playVideo = (key, seconds = null) => {
+    const box = $('#video-box');
+    const next = videos.find((v) => v.key === key);
+    if (!box || !next) return;
+    box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (next.key === shown.key && seconds != null) {
+      seekTo($('#video'), shown, seconds);
+      return;
+    }
+    if (next.key !== shown.key) {
+      shown = next;
+      box.classList.toggle('vertical', Boolean(next.vertical));
+      box.innerHTML = `<iframe id="video" src="${esc(embedUrl(next, location.origin, seconds))}" title="Video zum Rezept"
+        allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`;
+      // TikTok kennt keine Startzeit in der Adresse, springt also erst nach dem Laden.
+      if (seconds != null && next.provider !== 'youtube') {
+        const frame = $('#video');
+        frame.addEventListener('load', () => seekTo(frame, next, seconds), { once: true });
+      }
+      app.querySelectorAll('#video-tabs [data-video]').forEach((t) => {
+        const on = t.dataset.video === next.key;
+        t.classList.toggle('active', on);
+        t.setAttribute('aria-selected', String(on));
+      });
+    }
+  };
+
+  app.querySelectorAll('#video-tabs [data-video]').forEach((t) => {
+    t.onclick = () => playVideo(t.dataset.video);
+  });
+
+  // Zeitstempel bei den Schritten: zum passenden Video und dort an die Stelle springen.
   app.querySelectorAll('.seek').forEach((b) => {
-    b.onclick = () => {
-      const frame = $('#video');
-      frame.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      seekTo(frame, video, Number(b.dataset.t));
-    };
+    b.onclick = () => playVideo(b.dataset.video, Number(b.dataset.t));
   });
 
   if (!own) {
@@ -1146,7 +1184,7 @@ async function renderEditor(id) {
   };
   let keptImages = [...r.images];
   let tags = [...r.tags];
-  const toEdit = (s) => ({ text: stepText(s), t: stepTime(s) });
+  const toEdit = (s) => ({ text: stepText(s), t: stepTime(s), v: (typeof s === 'object' && s?.v) || null });
   let steps = r.steps.length ? r.steps.map(toEdit) : [toEdit('')];
   const knownTags = [...new Set((recipes || []).flatMap((x) => x.tags))].sort(collator.compare);
   let altIds = existing ? alternativeIds(links, existing.id) : [];
@@ -1304,15 +1342,17 @@ async function renderEditor(id) {
   const stepList = $('#steps');
   const grow = (ta) => { ta.style.height = 'auto'; ta.style.height = `${ta.scrollHeight + 2}px`; };
   const drawSteps = () => {
-    // Zeitstempel-Felder nur, wenn unter Quellen ein Video steht.
-    const hasVideo = Boolean(videoOf(form.sources.value.split('\n')));
+    // Zeitstempel-Felder nur, wenn unter Quellen ein Video steht; die Auswahl des Videos
+    // erst, wenn es mehrere sind.
+    const videos = videosOf(form.sources.value.split('\n'));
     stepList.innerHTML = steps.map((st, i) => `<li>
       <div class="step-head"><span>Schritt ${i + 1}</span>
         ${steps.length > 1 ? `<button type="button" class="link danger-link" data-remove="${i}">Entfernen</button>` : ''}</div>
       <textarea data-step="${i}" rows="2" aria-label="Schritt ${i + 1}">${esc(st.text)}</textarea>
-      ${hasVideo ? `<div class="step-time" data-time="${i}"><span>Stelle im Video</span>
+      ${videos.length ? `<div class="step-time" data-time="${i}"><span>Stelle im Video</span>
         <input type="number" name="min" min="0" max="600" inputmode="numeric" placeholder="0" value="${st.t == null ? '' : Math.floor(st.t / 60)}" aria-label="Minuten für Schritt ${i + 1}"> Min.
-        <input type="number" name="sec" min="0" max="59" inputmode="numeric" placeholder="0" value="${st.t == null ? '' : st.t % 60}" aria-label="Sekunden für Schritt ${i + 1}"> Sek.</div>` : ''}
+        <input type="number" name="sec" min="0" max="59" inputmode="numeric" placeholder="0" value="${st.t == null ? '' : st.t % 60}" aria-label="Sekunden für Schritt ${i + 1}"> Sek.
+        ${videos.length > 1 ? `<select name="video" aria-label="Video für Schritt ${i + 1}">${videos.map((v, n) => `<option value="${esc(v.key)}"${v.key === (st.v ?? videos[0].key) ? ' selected' : ''}>Video ${n + 1}</option>`).join('')}</select>` : ''}</div>` : ''}
     </li>`).join('');
     stepList.querySelectorAll('textarea').forEach((ta) => {
       grow(ta);
@@ -1320,17 +1360,24 @@ async function renderEditor(id) {
     });
     stepList.querySelectorAll('[data-time]').forEach((box) => {
       const [min, sec] = box.querySelectorAll('input');
+      const pick = box.querySelector('select');
       box.oninput = () => {
         const m = Math.max(0, Math.floor(Number(min.value) || 0));
         const s = Math.max(0, Math.floor(Number(sec.value) || 0));
-        steps[Number(box.dataset.time)].t = min.value === '' && sec.value === '' ? null : m * 60 + s;
+        const st = steps[Number(box.dataset.time)];
+        st.t = min.value === '' && sec.value === '' ? null : m * 60 + s;
+        if (st.t != null) st.v = pick ? pick.value : (videos[0]?.key ?? null);
       };
     });
     stepList.querySelectorAll('[data-remove]').forEach((b) => {
       b.onclick = () => { steps.splice(Number(b.dataset.remove), 1); drawSteps(); };
     });
   };
-  const setSteps = (list) => { steps = (list.length ? list : ['']).map(toEdit); drawSteps(); };
+  // key: Video, zu dem die Zeitstempel importierter Schritte gehören.
+  const setSteps = (list, key = null) => {
+    steps = (list.length ? list : ['']).map(toEdit).map((st) => (st.t != null && key ? { ...st, v: key } : st));
+    drawSteps();
+  };
   form.sources.onchange = drawSteps;
   $('#step-add').onclick = () => {
     steps.push(toEdit(''));
@@ -1402,6 +1449,12 @@ async function renderEditor(id) {
       if (tagInput.value.trim()) addTag();
       const num = (v) => (v === '' ? null : Math.max(0, Math.round(Number(v))));
       const lines = (v) => v.split('\n').map((s) => s.trim()).filter(Boolean);
+      const sourceLines = lines(form.sources.value);
+      // Wurde ein Video-Link aus den Quellen gelöscht, verlieren seine Schritte den Zeitstempel.
+      const dropped = dropMissingTimes(
+        steps.map((st) => makeStep(st.text.trim(), st.t, st.v)).filter((st) => stepText(st)),
+        videosOf(sourceLines),
+      );
       const row = {
         id: recipeId,
         title: form.title.value.trim(),
@@ -1411,8 +1464,8 @@ async function renderEditor(id) {
         total_minutes: num(form.total_minutes.value),
         cook_minutes: num(form.cook_minutes.value),
         ingredients: lines(form.ingredients.value).map(parseIngredientLine),
-        steps: steps.map((st) => makeStep(st.text.trim(), st.t)).filter((st) => stepText(st)),
-        sources: lines(form.sources.value),
+        steps: dropped.steps,
+        sources: sourceLines,
         notes: form.notes.value.trim(),
         images: [...keptImages, ...uploaded],
       };
@@ -1436,7 +1489,9 @@ async function renderEditor(id) {
       if (recipes) {
         recipes = [...recipes.filter((x) => x.id !== data.id), data].sort((a, b) => collator.compare(a.title, b.title));
       }
-      toast('Gespeichert');
+      toast(dropped.dropped
+        ? `Gespeichert. ${dropped.dropped} ${dropped.dropped === 1 ? 'Zeitstempel' : 'Zeitstempel'} ohne Video entfernt.`
+        : 'Gespeichert');
       location.hash = `#/r/${data.id}`;
     } catch (err) {
       if (uploaded.length) await supabase.storage.from(IMAGE_BUCKET).remove(uploaded);
@@ -2447,7 +2502,8 @@ function setupImport(form, { setTags, setSteps, addImage, drawPreview, setNutrit
     if (data.notes) form.notes.value = [form.notes.value.trim(), data.notes].filter(Boolean).join('\n\n');
     const sources = form.sources.value.split('\n').map((s) => s.trim()).filter(Boolean);
     if (data.source && !sources.includes(data.source)) form.sources.value = [...sources, data.source].join('\n');
-    if (data.video) setSteps(data.steps ?? []); // Zeitstempel-Felder erscheinen erst mit dem Video-Link
+    // Zeitstempel-Felder erscheinen erst mit dem Video-Link; die Schritte merken sich das Video.
+    if (data.video) setSteps(data.steps ?? [], videoKey(data.video));
     if (data.image) {
       const blob = await (await fetch(data.image)).blob();
       addImage(new File([blob], 'import.jpg', { type: blob.type }));
