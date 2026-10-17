@@ -6,6 +6,12 @@
 // Aufruf aus der App: supabase.functions.invoke('import-recipe', { body: { url } })
 // Antwort: { title, description, tags, servings, total_minutes, cook_minutes,
 //            ingredients: string[], steps: string[], notes, source, image } (image als data:-URL)
+//
+// Videos (YouTube, YouTube Shorts, TikTok) wertet Google Gemini aus. Dann sind Schritte
+// { text, t } mit t = Sekunden im Video, und die Antwort enthält zusätzlich
+// video: { provider, id } und ai: 'ok' | 'none' | 'failed' (+ ai_error).
+// Secrets in Supabase: GEMINI_API_KEY (nötig für Videos), YOUTUBE_API_KEY (Titel und
+// Beschreibung von YouTube), optional GEMINI_MODEL.
 
 const MAX_PAGE_BYTES = 5_000_000;
 const MAX_IMAGE_BYTES = 8_000_000;
@@ -247,6 +253,261 @@ export function isAllowedUrl(raw: string): boolean {
   return host.includes('.');
 }
 
+// ---------- Videos ----------
+
+export interface VideoRef { provider: 'youtube' | 'tiktok'; id: string; }
+
+export function parseVideoUrl(raw: string): VideoRef | null {
+  let u: URL;
+  try { u = new URL(raw.trim()); } catch { return null; }
+  const host = u.hostname.toLowerCase().replace(/^(www|m|music)\./, '');
+  const path = u.pathname;
+  const ytId = (s: string | null | undefined) => (s && /^[\w-]{11}$/.test(s) ? s : null);
+  if (host === 'youtu.be') {
+    const id = ytId(path.split('/')[1]);
+    return id ? { provider: 'youtube', id } : null;
+  }
+  if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+    const m = path.match(/^\/(?:shorts|embed|live|v)\/([\w-]{11})/);
+    const id = ytId(m ? m[1] : path === '/watch' ? u.searchParams.get('v') : null);
+    return id ? { provider: 'youtube', id } : null;
+  }
+  if (host === 'tiktok.com') {
+    const m = path.match(/\/(?:video|v)\/(\d{8,25})/) || path.match(/^\/player\/v1\/(\d{8,25})/);
+    return m ? { provider: 'tiktok', id: m[1] } : null;
+  }
+  return null;
+}
+
+// Kurzlinks aus der TikTok-App (vm.tiktok.com/…) leiten auf die eigentliche Video-Seite weiter.
+export const isTikTokShortLink = (raw: string) => /^https?:\/\/(vm|vt)\.tiktok\.com\//i.test(raw.trim());
+
+export function videoSource(video: VideoRef, original: string): string {
+  if (video.provider === 'youtube') {
+    return /\/shorts\//.test(original) ? `https://www.youtube.com/shorts/${video.id}` : `https://www.youtube.com/watch?v=${video.id}`;
+  }
+  const u = new URL(original);
+  return `https://www.tiktok.com${u.pathname}`;
+}
+
+// ISO-8601-Dauer wie "PT4M13S" in Sekunden (Videolänge).
+export function durationSeconds(s: unknown): number | null {
+  const m = String(s ?? '').match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/i);
+  if (!m) return null;
+  const sec = Number(m[1] || 0) * 3600 + Number(m[2] || 0) * 60 + Number(m[3] || 0);
+  return sec > 0 ? sec : null;
+}
+
+// "2:15", "01:02:03", "135" oder "135s" in Sekunden.
+export function parseTimestamp(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) && v >= 0 ? Math.round(v) : null;
+  const s = String(v ?? '').trim().replace(/s$/i, '');
+  if (!/^\d+(:\d{1,2}){0,2}$/.test(s)) return null;
+  return s.split(':').reduce((sum, part) => sum * 60 + Number(part), 0);
+}
+
+interface VideoMeta { title: string; description: string; tags: string[]; thumbnail: string | null; seconds: number | null; }
+
+function env(name: string): string | undefined {
+  // deno-lint-ignore no-explicit-any
+  return (globalThis as any).Deno?.env.get(name) || undefined;
+}
+
+async function getJson(url: string, init: RequestInit = {}): Promise<Record<string, unknown>> {
+  const res = await fetch(url, { ...init, signal: init.signal ?? AbortSignal.timeout(15_000) });
+  if (!res.ok) throw new Error(`Fehler ${res.status}`);
+  return await res.json();
+}
+
+async function youtubeMeta(id: string): Promise<VideoMeta> {
+  const key = env('YOUTUBE_API_KEY');
+  if (key) {
+    try {
+      const data = await getJson(`https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=${id}&key=${encodeURIComponent(key)}`);
+      // deno-lint-ignore no-explicit-any
+      const item = (data.items as any[])?.[0];
+      if (item) {
+        const t = item.snippet.thumbnails ?? {};
+        const thumb = t.maxres ?? t.standard ?? t.high ?? t.medium ?? t.default;
+        return {
+          title: cleanText(item.snippet.title),
+          description: String(item.snippet.description ?? '').trim(),
+          tags: (item.snippet.tags ?? []).map((x: unknown) => cleanText(x)),
+          thumbnail: thumb?.url ?? null,
+          seconds: durationSeconds(item.contentDetails?.duration),
+        };
+      }
+    } catch { /* weiter mit oEmbed */ }
+  }
+  const o = await getJson(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(`https://www.youtube.com/watch?v=${id}`)}`);
+  return { title: cleanText(o.title), description: '', tags: [], thumbnail: (o.thumbnail_url as string) ?? null, seconds: null };
+}
+
+async function tiktokMeta(url: string): Promise<VideoMeta> {
+  const o = await getJson(`https://www.tiktok.com/oembed?url=${encodeURIComponent(url)}`, { headers: { 'User-Agent': UA } });
+  // Bei TikTok ist der oEmbed-Titel die komplette Bildunterschrift, oft mit dem Rezept darin.
+  const caption = String(o.title ?? '').trim();
+  const firstLine = cleanText(caption.split('\n')[0].replace(/#\S+/g, '')).slice(0, 120);
+  return { title: firstLine || `TikTok von ${cleanText(o.author_name)}`, description: caption, tags: [], thumbnail: (o.thumbnail_url as string) ?? null, seconds: null };
+}
+
+const AI_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    is_recipe: { type: 'BOOLEAN' },
+    title: { type: 'STRING' },
+    description: { type: 'STRING' },
+    servings: { type: 'INTEGER', nullable: true },
+    total_minutes: { type: 'INTEGER', nullable: true },
+    cook_minutes: { type: 'INTEGER', nullable: true },
+    tags: { type: 'ARRAY', items: { type: 'STRING' } },
+    ingredients: { type: 'ARRAY', items: { type: 'STRING' } },
+    steps: {
+      type: 'ARRAY',
+      items: { type: 'OBJECT', properties: { text: { type: 'STRING' }, start: { type: 'STRING', nullable: true } }, required: ['text'] },
+    },
+    notes: { type: 'STRING' },
+  },
+  required: ['is_recipe', 'title', 'ingredients', 'steps'],
+};
+
+export function aiPrompt(meta: VideoMeta, withVideo: boolean): string {
+  return [
+    withVideo
+      ? 'Du bekommst ein Kochvideo samt Titel und Beschreibung. Schau dir das ganze Video an (Bild, Ton und eingeblendete Texte) und schreibe das Rezept auf.'
+      : 'Du bekommst Titel und Beschreibung eines Kochvideos. Schreibe das Rezept auf, das darin steht.',
+    'Regeln:',
+    '- Alles auf Deutsch. Titel kurz und ohne Emojis oder Hashtags. Beschreibung höchstens zwei Sätze.',
+    '- Zutaten: eine pro Eintrag, Menge zuerst, metrische Einheiten (z. B. "200 g Mehl", "1 EL Olivenöl", "2 Knoblauchzehen", "Salz"). Nur Mengen nennen, die im Video oder Text vorkommen; nichts erfinden.',
+    '- Schritte: in der Reihenfolge des Videos, jeweils ein bis drei kurze Sätze, keine Nummerierung.',
+    withVideo
+      ? '- start: Zeitpunkt im Video im Format M:SS, an dem der Schritt beginnt. Wenn unklar, null.'
+      : '- start: immer null.',
+    '- servings, total_minutes, cook_minutes nur, wenn sie genannt werden oder sich klar ergeben, sonst null.',
+    '- tags: höchstens fünf kurze deutsche Stichworte (z. B. "vegetarisch", "Pasta", "schnell").',
+    '- notes: Tipps und Varianten aus dem Video, sonst leer.',
+    '- Ist es kein Rezept, setze is_recipe auf false und lass Zutaten und Schritte leer.',
+    '',
+    `Titel: ${meta.title}`,
+    `Beschreibung:\n${meta.description.slice(0, 8000) || '(keine)'}`,
+  ].join('\n');
+}
+
+const RETRY_STATUS = new Set([404, 429, 500, 503]);
+
+// deno-lint-ignore no-explicit-any
+async function askGemini(key: string, parts: any[]): Promise<Record<string, unknown>> {
+  const models = [...new Set([env('GEMINI_MODEL'), 'gemini-flash-latest', 'gemini-2.5-flash'].filter(Boolean))] as string[];
+  let lastError = '';
+  for (const model of models) {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+      body: JSON.stringify({
+        contents: [{ parts }],
+        generationConfig: {
+          temperature: 0.2,
+          responseMimeType: 'application/json',
+          responseSchema: AI_SCHEMA,
+          mediaResolution: 'MEDIA_RESOLUTION_LOW',
+        },
+      }),
+      signal: AbortSignal.timeout(110_000),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const text = (data.candidates?.[0]?.content?.parts ?? []).map((p: { text?: string }) => p.text ?? '').join('');
+      if (!text) throw new Error('Gemini hat keine Antwort geliefert.');
+      return JSON.parse(text);
+    }
+    let detail = '';
+    try { detail = (await res.json()).error?.message ?? ''; } catch { /* keine JSON-Antwort */ }
+    lastError = `Gemini: Fehler ${res.status}${detail ? ` (${detail})` : ''}`;
+    if (!RETRY_STATUS.has(res.status)) break;
+  }
+  throw new Error(lastError);
+}
+
+export function normalizeAiRecipe(ai: Record<string, unknown>, maxSeconds: number | null, withTimes: boolean) {
+  const str = (v: unknown) => cleanText(v);
+  const int = (v: unknown, max: number) => {
+    const n = Number(v);
+    return v != null && Number.isFinite(n) && n >= 1 && n <= max ? Math.round(n) : null;
+  };
+  const list = (v: unknown) => (Array.isArray(v) ? v.map(str).filter(Boolean) : []);
+  const steps = (Array.isArray(ai.steps) ? ai.steps : []).map((s: Record<string, unknown> | string) => {
+    const text = str(typeof s === 'string' ? s : s?.text);
+    let t = withTimes && typeof s === 'object' ? parseTimestamp(s?.start) : null;
+    if (t != null && maxSeconds != null && t > maxSeconds) t = null;
+    return { text, t };
+  }).filter((s) => s.text).map((s) => (s.t == null ? s.text : s));
+  return {
+    is_recipe: ai.is_recipe !== false,
+    title: str(ai.title),
+    description: str(ai.description),
+    tags: list(ai.tags).slice(0, 5),
+    servings: int(ai.servings, 100),
+    total_minutes: int(ai.total_minutes, 6000),
+    cook_minutes: int(ai.cook_minutes, 6000),
+    ingredients: list(ai.ingredients),
+    steps,
+    notes: str(ai.notes),
+  };
+}
+
+async function importVideo(video: VideoRef, url: string) {
+  const source = videoSource(video, url);
+  let meta: VideoMeta;
+  try {
+    meta = video.provider === 'youtube' ? await youtubeMeta(video.id) : await tiktokMeta(source);
+  } catch {
+    meta = { title: '', description: '', tags: [], thumbnail: null, seconds: null };
+  }
+
+  const key = env('GEMINI_API_KEY');
+  let ai: ReturnType<typeof normalizeAiRecipe> | null = null;
+  let aiError = '';
+  if (key) {
+    const tries: { withVideo: boolean }[] = [];
+    if (video.provider === 'youtube') tries.push({ withVideo: true });
+    if (meta.description) tries.push({ withVideo: false });
+    for (const { withVideo } of tries) {
+      try {
+        const parts = [
+          ...(withVideo ? [{ file_data: { file_uri: `https://www.youtube.com/watch?v=${video.id}` } }] : []),
+          { text: aiPrompt(meta, withVideo) },
+        ];
+        ai = normalizeAiRecipe(await askGemini(key, parts), meta.seconds, withVideo);
+        break;
+      } catch (err) {
+        aiError = (err as Error).message;
+        if ((err as Error).name === 'TimeoutError') break; // kein zweiter Versuch, sonst läuft die Funktion zu lange
+      }
+    }
+  }
+
+  const found = ai?.is_recipe && ai.ingredients.length > 0;
+  const image = meta.thumbnail ? await fetchImage(meta.thumbnail) : null;
+  return {
+    title: (found && ai!.title) || meta.title,
+    description: found ? ai!.description : '',
+    tags: found ? ai!.tags : [],
+    servings: found ? ai!.servings : null,
+    total_minutes: found ? ai!.total_minutes : null,
+    cook_minutes: found ? ai!.cook_minutes : null,
+    ingredients: found ? ai!.ingredients : [],
+    steps: found ? ai!.steps : [],
+    // Ohne Rezept aus der KI wenigstens die Video-Beschreibung als Notiz übernehmen.
+    notes: found ? ai!.notes : meta.description.slice(0, 4000),
+    structured: Boolean(found),
+    source,
+    image,
+    video,
+    ai: !key ? 'none' : ai ? 'ok' : 'failed',
+    ...(ai ? {} : aiError ? { ai_error: aiError } : {}),
+  };
+}
+
 async function readLimited(res: Response, limit: number): Promise<Uint8Array> {
   const reader = res.body!.getReader();
   const chunks: Uint8Array[] = [];
@@ -320,6 +581,18 @@ async function handle(req: Request): Promise<Response> {
     return json({ error: 'Ungültige Anfrage.' }, 400);
   }
   if (!isAllowedUrl(url)) return json({ error: 'Bitte einen gültigen Link (https://…) eingeben.' }, 400);
+
+  if (isTikTokShortLink(url)) {
+    try {
+      const res = await fetch(url, { headers: { 'User-Agent': UA }, redirect: 'follow', signal: AbortSignal.timeout(10_000) });
+      await res.body?.cancel();
+      url = res.url || url;
+    } catch {
+      return json({ error: 'Der TikTok-Link konnte nicht aufgelöst werden.' }, 502);
+    }
+  }
+  const video = parseVideoUrl(url);
+  if (video) return json(await importVideo(video, url));
 
   let html: string;
   try {

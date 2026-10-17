@@ -7,6 +7,9 @@ import {
   additionsFromPlan, findConflict, mergeInto, removeRecipe, removePlanEntry, recipesOnList, plannedIds, formatItemQuantity,
 } from './shopping.js';
 import { PRODUCE, MONTHS, seasonOf, inSeason, seasonalRecipes } from './season.js';
+import {
+  videoOf, embedUrl, seekTo, stepText, stepTime, makeStep, formatTime, parseTime,
+} from './video.js';
 
 const app = document.getElementById('app');
 const nav = document.getElementById('nav');
@@ -562,12 +565,15 @@ function showRecipe(r, { own, back, backLabel, from = '' }) {
   window.scrollTo(0, 0);
   let servings = r.servings;
   const sources = r.sources.map((u) => [u, safeUrl(u)]).filter(([, href]) => href);
+  const video = videoOf(r.sources);
 
   app.innerHTML = `
     <article class="recipe">
       ${back ? `<a class="back" href="${back}">← ${esc(backLabel)}</a>` : ''}
       ${from ? `<p class="hint from">${esc(from)}</p>` : ''}
       ${r.images.length ? `<div class="gallery">${r.images.map((p) => `<img src="${esc(imageUrl(p))}" alt="">`).join('')}</div>` : ''}
+      ${video ? `<div class="video${video.vertical ? ' vertical' : ''}"><iframe id="video" src="${esc(embedUrl(video, location.origin))}" title="Video zum Rezept"
+        allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>` : ''}
       <h1>${esc(r.title)}</h1>
       ${own ? `<div class="stars" role="group" aria-label="Bewertung">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-star="${n}" class="${(r.rating ?? 0) >= n ? 'on' : ''}" aria-label="${n} von 5 Sternen" aria-pressed="${r.rating === n}">★</button>`).join('')}</div>`
     : r.rating ? `<div class="stars readonly" aria-label="${r.rating} von 5 Sternen">${'★'.repeat(r.rating)}${'☆'.repeat(5 - r.rating)}</div>` : ''}
@@ -592,7 +598,10 @@ function showRecipe(r, { own, back, backLabel, from = '' }) {
       </section>` : ''}
 
       ${r.steps.length ? `<section><h2>Zubereitung</h2>
-        <ol class="steps">${r.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol></section>` : ''}
+        <ol class="steps">${r.steps.map((s) => {
+    const t = video ? stepTime(s) : null;
+    return `<li>${t != null ? `<button type="button" class="seek" data-t="${t}" aria-label="Video ab ${formatTime(t)} abspielen">▶ ${formatTime(t)}</button> ` : ''}${esc(stepText(s))}</li>`;
+  }).join('')}</ol></section>` : ''}
 
       ${r.notes ? `<section><h2>Notizen</h2><p class="notes">${esc(r.notes)}</p></section>` : ''}
 
@@ -625,6 +634,15 @@ function showRecipe(r, { own, back, backLabel, from = '' }) {
     };
   });
   drawIngredients();
+
+  // Zeitstempel bei den Schritten: zum Video scrollen und dort an die Stelle springen.
+  app.querySelectorAll('.seek').forEach((b) => {
+    b.onclick = () => {
+      const frame = $('#video');
+      frame.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      seekTo(frame, video, Number(b.dataset.t));
+    };
+  });
 
   if (!own) {
     if (session) $('#copy').onclick = (e) => copyRecipe(r, e.target);
@@ -695,7 +713,8 @@ async function renderEditor(id) {
   };
   let keptImages = [...r.images];
   let tags = [...r.tags];
-  let steps = r.steps.length ? [...r.steps] : [''];
+  const toEdit = (s) => ({ text: stepText(s), t: stepTime(s) });
+  let steps = r.steps.length ? r.steps.map(toEdit) : [toEdit('')];
   const knownTags = [...new Set((recipes || []).flatMap((x) => x.tags))].sort(collator.compare);
   let newFiles = [];
 
@@ -710,7 +729,7 @@ async function renderEditor(id) {
             <input type="url" id="import-url" inputmode="url" placeholder="https://www.chefkoch.de/rezepte/…" autocomplete="off">
             <button type="button" class="btn primary" id="import-btn">Importieren</button>
           </div>
-          <small>Liest Titel, Zutaten, Zubereitung, Zeiten und Bild aus. Danach kannst du alles anpassen.</small>
+          <small>Liest Titel, Zutaten, Zubereitung, Zeiten und Bild aus, auch aus Videos von YouTube und TikTok. Danach kannst du alles anpassen.</small>
         </label>
         <p class="hint" id="import-msg" role="status"></p>
       </div>`}
@@ -810,22 +829,33 @@ async function renderEditor(id) {
   const stepList = $('#steps');
   const grow = (ta) => { ta.style.height = 'auto'; ta.style.height = `${ta.scrollHeight + 2}px`; };
   const drawSteps = () => {
-    stepList.innerHTML = steps.map((text, i) => `<li>
+    // Zeitstempel-Felder nur, wenn unter Quellen ein Video steht.
+    const hasVideo = Boolean(videoOf(form.sources.value.split('\n')));
+    stepList.innerHTML = steps.map((st, i) => `<li>
       <div class="step-head"><span>Schritt ${i + 1}</span>
         ${steps.length > 1 ? `<button type="button" class="link danger-link" data-remove="${i}">Entfernen</button>` : ''}</div>
-      <textarea data-step="${i}" rows="2" aria-label="Schritt ${i + 1}">${esc(text)}</textarea>
+      <textarea data-step="${i}" rows="2" aria-label="Schritt ${i + 1}">${esc(st.text)}</textarea>
+      ${hasVideo ? `<label class="step-time">Stelle im Video <input data-time="${i}" inputmode="numeric" placeholder="m:ss" value="${formatTime(st.t)}" aria-label="Stelle im Video für Schritt ${i + 1}"></label>` : ''}
     </li>`).join('');
     stepList.querySelectorAll('textarea').forEach((ta) => {
       grow(ta);
-      ta.oninput = () => { steps[Number(ta.dataset.step)] = ta.value; grow(ta); };
+      ta.oninput = () => { steps[Number(ta.dataset.step)].text = ta.value; grow(ta); };
+    });
+    stepList.querySelectorAll('[data-time]').forEach((input) => {
+      input.oninput = () => {
+        const t = parseTime(input.value);
+        input.setCustomValidity(input.value.trim() && t == null ? 'Bitte als Minuten:Sekunden eingeben, z. B. 2:15' : '');
+        steps[Number(input.dataset.time)].t = t;
+      };
     });
     stepList.querySelectorAll('[data-remove]').forEach((b) => {
       b.onclick = () => { steps.splice(Number(b.dataset.remove), 1); drawSteps(); };
     });
   };
-  const setSteps = (list) => { steps = list.length ? [...list] : ['']; drawSteps(); };
+  const setSteps = (list) => { steps = (list.length ? list : ['']).map(toEdit); drawSteps(); };
+  form.sources.onchange = drawSteps;
   $('#step-add').onclick = () => {
-    steps.push('');
+    steps.push(toEdit(''));
     drawSteps();
     stepList.querySelector('li:last-child textarea').focus();
   };
@@ -860,7 +890,7 @@ async function renderEditor(id) {
         total_minutes: num(form.total_minutes.value),
         cook_minutes: num(form.cook_minutes.value),
         ingredients: lines(form.ingredients.value).map(parseIngredientLine),
-        steps: steps.map((st) => st.trim()).filter(Boolean),
+        steps: steps.map((st) => makeStep(st.text.trim(), st.t)).filter((st) => stepText(st)),
         sources: lines(form.sources.value),
         notes: form.notes.value.trim(),
         images: [...keptImages, ...uploaded],
@@ -1652,7 +1682,20 @@ async function renderCookbookRecipe(ownerId, recipeId) {
   showRecipe(r, { own: false, back: `#/kochbuch/${ownerId}`, backLabel: `Kochbuch von ${book.email}` });
 }
 
+function importMessage(data) {
+  if (data.ingredients?.length) {
+    return data.video
+      ? 'Aus dem Video übernommen. Die KI kann sich irren: Prüfe Mengen, Schritte und Zeitstempel, dann tippe auf Speichern.'
+      : 'Importiert. Prüfe die Angaben und tippe auf Speichern.';
+  }
+  if (!data.video) return 'Auf dieser Seite wurden keine Rezeptdaten gefunden. Titel und Bild sind übernommen, den Rest bitte selbst ergänzen.';
+  if (data.ai === 'none') return 'Video übernommen. Für Zutaten und Schritte fehlt in Supabase noch das Secret GEMINI_API_KEY (siehe README).';
+  if (data.ai === 'failed') return `Video übernommen, aber die Auswertung hat nicht geklappt${data.ai_error ? ` (${data.ai_error})` : ''}. Die Videobeschreibung steht in den Notizen.`;
+  return 'Im Video wurde kein Rezept gefunden. Titel, Bild und Link sind übernommen, den Rest bitte selbst ergänzen.';
+}
+
 // Import per Link: die Edge Function "import-recipe" lädt die Seite und liest das Rezept aus.
+// Bei Videos (YouTube, TikTok) wertet sie das Video mit Gemini aus.
 function setupImport(form, { setTags, setSteps, addImage, drawPreview }) {
   const input = $('#import-url');
   const btn = $('#import-btn');
@@ -1663,7 +1706,8 @@ function setupImport(form, { setTags, setSteps, addImage, drawPreview }) {
     if (!safeUrl(url)) { msg.textContent = 'Bitte einen vollständigen Link (https://…) einfügen.'; return; }
     btn.disabled = true;
     btn.textContent = 'Lade …';
-    msg.textContent = '';
+    msg.textContent = videoOf([url]) || /tiktok\.com/i.test(url)
+      ? 'Das Video wird ausgewertet. Das kann bis zu einer Minute dauern …' : '';
     try {
       const { data, error } = await supabase.functions.invoke('import-recipe', { body: { url } });
       if (error) {
@@ -1684,14 +1728,13 @@ function setupImport(form, { setTags, setSteps, addImage, drawPreview }) {
       if (data.notes) form.notes.value = [form.notes.value.trim(), data.notes].filter(Boolean).join('\n\n');
       const sources = form.sources.value.split('\n').map((s) => s.trim()).filter(Boolean);
       if (!sources.includes(data.source)) form.sources.value = [...sources, data.source].join('\n');
+      if (data.video) setSteps(data.steps ?? []); // Zeitstempel-Felder erscheinen erst mit dem Video-Link
       if (data.image) {
         const blob = await (await fetch(data.image)).blob();
         addImage(new File([blob], 'import.jpg', { type: blob.type }));
       }
       drawPreview();
-      msg.textContent = data.ingredients?.length
-        ? 'Importiert. Prüfe die Angaben und tippe auf Speichern.'
-        : 'Auf dieser Seite wurden keine Rezeptdaten gefunden. Titel und Bild sind übernommen, den Rest bitte selbst ergänzen.';
+      msg.textContent = importMessage(data);
       input.value = '';
     } catch (err) {
       msg.textContent = `Import fehlgeschlagen: ${err.message}`;

@@ -132,6 +132,9 @@ span.chip { cursor: default; background: var(--surface-2); }
   border-radius: var(--radius); scroll-snap-align: start;
 }
 .gallery img:only-child { width: 100%; }
+.video { margin: 0 0 12px; scroll-margin-top: 72px; }
+.video iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: var(--radius); background: #000; }
+.video.vertical iframe { aspect-ratio: 9 / 16; width: auto; max-width: 100%; height: min(70vh, 640px); margin: 0 auto; }
 .lead { color: var(--muted); font-size: 1.05rem; margin: 0 0 12px; }
 
 .times { display: flex; gap: 24px; margin: 12px 0 0; }
@@ -155,6 +158,11 @@ span.chip { cursor: default; background: var(--surface-2); }
 
 .steps { padding-left: 1.4rem; }
 .steps li { margin-bottom: 10px; padding-left: 4px; }
+.seek {
+  margin-right: 4px; padding: 1px 8px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface); color: var(--accent); font: inherit; font-size: 0.85rem;
+  font-weight: 600; font-variant-numeric: tabular-nums; cursor: pointer; vertical-align: 1px;
+}
 .notes { white-space: pre-wrap; margin: 0; }
 .sources { padding-left: 1.2rem; }
 
@@ -232,6 +240,8 @@ legend { font-weight: 600; padding: 0 4px; }
 .step-edit { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
 .step-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; font-weight: 600; font-size: 0.9rem; }
 .step-edit textarea { resize: none; overflow: hidden; }
+.step-time { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 0.85rem; color: var(--muted); }
+.step-time input { width: 6rem; }
 .danger-link { color: var(--danger); font-size: 0.875rem; }
 #step-add { justify-self: start; }
 
