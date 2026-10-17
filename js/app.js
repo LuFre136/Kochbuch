@@ -8,6 +8,7 @@ import {
 } from './shopping.js';
 import { PRODUCE, MONTHS, seasonOf, inSeason, seasonalRecipes } from './season.js';
 import { CATEGORIES, guessCategory, categoryKey, categoryRank } from './categories.js';
+import { DEFAULT_PLACES, guessPlaces } from './places.js';
 import {
   videoOf, embedUrl, seekTo, stepText, stepTime, makeStep, formatTime,
 } from './video.js';
@@ -21,6 +22,9 @@ let recipes = null; // Cache aller eigenen Rezepte
 let listQuery = '';
 let categories = null; // eigene Zutaten-Kategorien: Map Schlüssel → Kategorie; null = noch nicht geladen
 let categoriesSaved = true; // false, solange kategorien.sql nicht ausgeführt wurde
+let places = null; // eigene Einkaufsorte [{ id, name }]; null = noch nicht geladen
+let placesTable = true; // false, solange orte.sql nicht ausgeführt wurde
+let placesSaved = true; // false, solange ingredient_categories keine Spalte places hat
 let myName; // Benutzername: undefined = noch nicht geladen, null = fehlt noch, false = benutzername.sql nicht eingerichtet
 let activeTag = null;
 let listSort = 'name';
@@ -77,47 +81,109 @@ async function loadRecipes(force = false) {
   return recipes;
 }
 
-// ---------- Zutaten-Kategorien ----------
+// ---------- Zutaten-Kategorien und Einkaufsorte ----------
 
 async function loadCategories() {
   if (categories) return categories;
-  const { data, error } = await supabase.from('ingredient_categories').select('key, category');
+  let { data, error } = await supabase.from('ingredient_categories').select('key, category, places');
+  placesSaved = !error;
+  // Ohne orte.sql gibt es die Spalte places noch nicht.
+  if (error) ({ data, error } = await supabase.from('ingredient_categories').select('key, category'));
   categoriesSaved = !error;
-  categories = new Map((data ?? []).map((c) => [c.key, c.category]));
+  categories = new Map((data ?? []).map((c) => [c.key, { category: c.category, places: c.places ?? null }]));
+  await loadPlaces();
   return categories;
 }
 
-// Eigene Kategorie einer Zutat, sonst ein Vorschlag anhand des Namens.
-function categoryOf(name) {
-  return categories?.get(categoryKey(name)) ?? guessCategory(name);
+// Eigene Einkaufsorte; wer noch keine hat, bekommt die Standard-Orte.
+async function loadPlaces() {
+  if (places) return places;
+  const { data, error } = await supabase.from('shopping_places').select('id, name, position').order('position');
+  placesTable = !error;
+  places = data?.length ? data.map(({ id, name }) => ({ id, name })) : DEFAULT_PLACES.map((p) => ({ ...p }));
+  if (placesTable && !data.length) {
+    const { error: e } = await supabase.from('shopping_places').insert(places.map((p, i) => ({ ...p, position: i })));
+    if (e) console.warn(e);
+  }
+  return places;
 }
 
-// Merkt sich für Zutaten, die zum ersten Mal vorkommen, die vorgeschlagene Kategorie.
-// Bereits vorhandene eigene Zuordnungen bleiben unverändert.
+const placeIds = () => (places ?? DEFAULT_PLACES).map((p) => p.id);
+const placeName = (id) => (places ?? DEFAULT_PLACES).find((p) => p.id === id)?.name;
+
+// Eigene Kategorie einer Zutat, sonst ein Vorschlag anhand des Namens.
+function categoryOf(name) {
+  return categories?.get(categoryKey(name))?.category ?? guessCategory(name);
+}
+
+// Eigene Orte einer Zutat (nur solche, die es noch gibt), sonst ein Vorschlag.
+function placesOf(name) {
+  const saved = categories?.get(categoryKey(name))?.places;
+  const ids = placeIds();
+  return saved ? saved.filter((id) => ids.includes(id)) : guessPlaces(name, categoryOf(name), ids);
+}
+
+// Merkt sich für Zutaten, die zum ersten Mal vorkommen, die vorgeschlagene Kategorie und die
+// vorgeschlagenen Orte. Bereits vorhandene eigene Zuordnungen bleiben unverändert.
 async function rememberCategories(names) {
   await loadCategories();
   const rows = new Map();
+  const missingPlaces = new Map(); // schon bekannte Zutaten ohne Orte (von vor orte.sql)
   for (const name of names) {
     const key = categoryKey(name);
-    if (key && !categories.has(key) && !rows.has(key)) rows.set(key, { key, category: guessCategory(name) });
+    if (!key || rows.has(key) || missingPlaces.has(key)) continue;
+    const known = categories.get(key);
+    if (!known) rows.set(key, { key, category: guessCategory(name), places: placesOf(name) });
+    else if (!known.places && placesSaved) missingPlaces.set(key, { key, category: known.category, places: placesOf(name) });
   }
-  if (!rows.size) return;
-  rows.forEach((row) => categories.set(row.key, row.category));
+  [...rows.values(), ...missingPlaces.values()].forEach((row) => categories.set(row.key, { category: row.category, places: row.places }));
   if (!categoriesSaved) return;
-  const { error } = await supabase.from('ingredient_categories')
-    .upsert([...rows.values()], { onConflict: 'owner_id,key', ignoreDuplicates: true });
-  if (error) console.warn(error);
+  const strip = (list) => (placesSaved ? list : list.map(({ places: _, ...row }) => row));
+  if (rows.size) {
+    const { error } = await supabase.from('ingredient_categories')
+      .upsert(strip([...rows.values()]), { onConflict: 'owner_id,key', ignoreDuplicates: true });
+    if (error) console.warn(error);
+  }
+  if (missingPlaces.size) {
+    const { error } = await supabase.from('ingredient_categories').upsert([...missingPlaces.values()], { onConflict: 'owner_id,key' });
+    if (error) console.warn(error);
+  }
 }
 
-async function setCategory(name, category) {
+// Speichert Kategorie und Orte einer Zutat; die Änderung gilt in allen Rezepten und Einkaufslisten.
+async function saveIngredientInfo(name, { category = categoryOf(name), places: ids = placesOf(name) }) {
   const key = categoryKey(name);
   if (!key) return;
   await loadCategories();
-  categories.set(key, category);
+  categories.set(key, { category, places: ids });
   if (!categoriesSaved) { toast('Kategorien werden erst gespeichert, wenn kategorien.sql ausgeführt ist.'); return; }
-  const { error } = await supabase.from('ingredient_categories').upsert({ key, category }, { onConflict: 'owner_id,key' });
+  const row = placesSaved ? { key, category, places: ids } : { key, category };
+  const { error } = await supabase.from('ingredient_categories').upsert(row, { onConflict: 'owner_id,key' });
   if (error) toast(error.message);
 }
+
+const setCategory = (name, category) => saveIngredientInfo(name, { category });
+
+async function setPlaces(name, ids) {
+  await saveIngredientInfo(name, { places: ids });
+  if (!placesSaved && categoriesSaved) toast('Orte werden erst gespeichert, wenn orte.sql ausgeführt ist.');
+}
+
+// Fragt in einem Fenster nach den Orten einer Zutat; liefert die Kennungen oder null bei Abbruch.
+async function choosePlaces(name) {
+  await loadCategories();
+  const current = placesOf(name);
+  const { value, form } = await openSheet(`<h2>${esc(name)}</h2>
+    <fieldset class="place-checks"><legend>Wo bekommst du das?</legend>${placeChecks(current)}</fieldset>
+    <div class="row"><button class="btn primary" value="ok">Speichern</button>
+      <button class="btn ghost" value="cancel" formnovalidate>Abbrechen</button></div>`);
+  if (value !== 'ok') return null;
+  return checkedPlaces(form);
+}
+
+const placeChecks = (selected) => (places ?? DEFAULT_PLACES).map((p) => `<label class="check"><input type="checkbox" name="place" value="${esc(p.id)}"${selected.includes(p.id) ? ' checked' : ''}> ${esc(p.name)}</label>`).join('');
+const checkedPlaces = (form) => [...form.querySelectorAll('[name=place]:checked')].map((c) => c.value);
+const placeLabel = (ids) => ids.map(placeName).filter(Boolean).join(', ') || 'Kein Ort';
 
 const categoryOptions = (selected) => CATEGORIES.map((c) => `<option${c === selected ? ' selected' : ''}>${esc(c)}</option>`).join('');
 
@@ -1023,11 +1089,19 @@ async function renderEditor(id) {
   const preview = $('#preview');
   const drawPreview = () => {
     const items = parseIngredientText(form.ingredients.value);
-    // Je Zutat die Kategorie; eine Änderung gilt für diese Zutat in allen Rezepten und Einkaufslisten.
-    preview.innerHTML = items.map((i, n) => `<li><span class="qty">${esc(formatQuantity(i)) || '–'}</span><span>${ingredientLabel(i)}</span>
+    // Je Zutat Kategorie und Einkaufsorte; eine Änderung gilt für diese Zutat in allen Rezepten und Einkaufslisten.
+    preview.innerHTML = items.map((i, n) => `<li><span class="qty">${esc(formatQuantity(i)) || '–'}</span><span>${ingredientLabel(i)}
+      ${i.name ? `<button type="button" class="link place-link" data-place="${n}" aria-label="Orte von ${esc(i.name)} ändern">📍&nbsp;${esc(placeLabel(placesOf(i.name)))}</button>` : ''}</span>
       ${i.name ? `<select class="cat-select" data-cat="${n}" aria-label="Kategorie von ${esc(i.name)}">${categoryOptions(categoryOf(i.name))}</select>` : ''}</li>`).join('');
     preview.querySelectorAll('[data-cat]').forEach((sel) => {
       sel.onchange = () => setCategory(items[Number(sel.dataset.cat)].name, sel.value);
+    });
+    preview.querySelectorAll('[data-place]').forEach((b) => {
+      b.onclick = async () => {
+        const { name } = items[Number(b.dataset.place)];
+        const ids = await choosePlaces(name);
+        if (ids) { await setPlaces(name, ids); drawPreview(); }
+      };
     });
   };
   form.ingredients.oninput = drawPreview;
@@ -1464,6 +1538,10 @@ async function renderShopping(listId) {
         <option value="new">+ Neue Liste …</option>
       </select>
       <button class="btn small" id="manage" aria-expanded="false" aria-controls="list-settings">Verwalten</button>
+      <select id="place-filter" aria-label="Nach Ort filtern">
+        <option value="">Alle Orte</option>
+        ${places.map((p) => `<option value="${esc(p.id)}"${placeFilter() === p.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}
+      </select>
       <select id="item-sort" aria-label="Sortierung">
         ${[['added', 'Hinzugefügt'], ['name', 'A–Z'], ['category', 'Nach Kategorie'], ['recipe', 'Nach Rezept']].map(([v, l]) => `<option value="${v}"${shoppingSort() === v ? ' selected' : ''}>${l}</option>`).join('')}
       </select>
@@ -1486,6 +1564,13 @@ async function renderShopping(listId) {
           <button class="link danger-link" data-member="${p.user_id}">Entfernen</button></li>`).join('')}</ul>` : ''}`
     : `<p class="hint">Geteilt von ${esc(owner ? personName(owner) : 'jemand anderem')}${members.length > 1 ? ` mit ${members.filter((p) => p.user_id !== me).map((p) => esc(personName(p))).join(', ')}` : ''}.</p>
         <div class="row"><button class="btn danger" id="leave-list">Austreten</button></div>`}
+      <h3>Meine Einkaufsorte</h3>
+      <p class="hint">Gelten für alle deine Listen. Welche Orte eine Zutat hat, änderst du, indem du den Eintrag nach rechts wischst.</p>
+      <ul class="people" id="place-list"></ul>
+      <form class="import-row" id="add-place">
+        <input name="place" placeholder="Neuer Ort, z. B. Bäcker" maxlength="40" autocomplete="off" enterkeyhint="done" aria-label="Neuer Ort">
+        <button class="btn">Hinzufügen</button>
+      </form>
     </section>
     <form class="import-row add-item" id="add-item">
       <input name="item" placeholder="z. B. 1 l Milch" autocomplete="off" enterkeyhint="done" aria-label="Eintrag hinzufügen">
@@ -1497,7 +1582,8 @@ async function renderShopping(listId) {
 
   const draw = () => {
     const sort = shoppingSort();
-    const sorted = sortItems(items, sort);
+    const filter = placeIds().includes(placeFilter()) ? placeFilter() : '';
+    const sorted = sortItems(items, sort).filter((i) => !filter || placesOf(i.name).includes(filter));
     const open = sorted.filter((i) => !i.checked);
     const done = sorted.filter((i) => i.checked);
     // Abhaken nur über die Checkbox; nach rechts wischen zeigt „Ändern“ (Menge und Kategorie).
@@ -1517,7 +1603,7 @@ async function renderShopping(listId) {
       return head + row(item);
     }).join('');
     $('#open-items').innerHTML = open.length ? rows(open)
-      : `<li class="hint empty-list">${done.length ? 'Alles erledigt.' : 'Die Liste ist leer. Füge oben etwas hinzu oder setze im Plan Rezepte auf die Liste.'}</li>`;
+      : `<li class="hint empty-list">${done.length ? 'Alles erledigt.' : filter ? `Für ${esc(placeName(filter))} steht nichts auf der Liste.` : 'Die Liste ist leer. Füge oben etwas hinzu oder setze im Plan Rezepte auf die Liste.'}</li>`;
     $('#done-items').innerHTML = done.length ? `<div class="section-head done-head"><h2>Erledigt (${done.length})</h2>
       <button class="link danger-link" id="clear-done">Erledigte löschen</button></div>
       <ul class="shop-items">${rows(done)}</ul>` : '';
@@ -1531,14 +1617,22 @@ async function renderShopping(listId) {
         closeSwipes();
         const item = items.find((i) => i.id === b.dataset.amount);
         const category = categoryOf(item.name);
+        const itemPlaces = placesOf(item.name);
         const { value, form } = await openSheet(`<h2>${esc(item.name)}</h2>
           <label>Menge <input name="qty" value="${esc(formatItemQuantity(item))}" placeholder="z. B. 500 g oder 3" autocomplete="off" enterkeyhint="done"></label>
           <p class="hint">Leer lassen für „ohne Menge“.</p>
           <label>Kategorie <select name="category">${categoryOptions(category)}</select></label>
+          <fieldset class="place-checks"><legend>Orte</legend>${placeChecks(itemPlaces)}</fieldset>
           <div class="row"><button class="btn primary" value="ok">Speichern</button>
             <button class="btn ghost" value="cancel" formnovalidate>Abbrechen</button></div>`);
         if (value !== 'ok') return;
-        if (form.category.value !== category) { await setCategory(item.name, form.category.value); draw(); }
+        const newPlaces = checkedPlaces(form);
+        const placesChanged = newPlaces.join() !== itemPlaces.join();
+        if (form.category.value !== category || placesChanged) {
+          await saveIngredientInfo(item.name, { category: form.category.value, places: newPlaces });
+          if (placesChanged && !placesSaved && categoriesSaved) toast('Orte werden erst gespeichert, wenn orte.sql ausgeführt ist.');
+          draw();
+        }
         const text = form.qty.value.trim();
         if (text === formatItemQuantity(item)) return;
         const parsed = text ? parseIngredientLine(`${text} ${item.name}`) : { amount: null, unit: null };
@@ -1605,6 +1699,69 @@ async function renderShopping(listId) {
   $('#item-sort').onchange = (e) => {
     try { localStorage.setItem('kochbuch.listSort', e.target.value); } catch { /* privater Modus */ }
     draw();
+  };
+
+  const drawPlaceFilter = () => {
+    $('#place-filter').innerHTML = `<option value="">Alle Orte</option>${places.map((p) => `<option value="${esc(p.id)}"${placeFilter() === p.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}`;
+  };
+  $('#place-filter').onchange = (e) => {
+    try { localStorage.setItem('kochbuch.listPlace', e.target.value); } catch { /* privater Modus */ }
+    draw();
+  };
+
+  // Eigene Einkaufsorte anlegen, umbenennen und löschen.
+  const needPlacesTable = () => {
+    if (placesTable) return false;
+    toast('Eigene Orte gibt es, sobald orte.sql ausgeführt ist.');
+    return true;
+  };
+  const placesChanged = () => { drawPlaces(); drawPlaceFilter(); draw(); };
+  const drawPlaces = () => {
+    $('#place-list').innerHTML = places.map((p) => `<li><span>${esc(p.name)}</span><span class="row">
+      <button type="button" class="link" data-rename-place="${esc(p.id)}">Umbenennen</button>
+      ${places.length > 1 ? `<button type="button" class="link danger-link" data-delete-place="${esc(p.id)}">Löschen</button>` : ''}</span></li>`).join('');
+    app.querySelectorAll('[data-rename-place]').forEach((b) => {
+      b.onclick = async () => {
+        if (needPlacesTable()) return;
+        const place = places.find((p) => p.id === b.dataset.renamePlace);
+        const name = prompt('Neuer Name des Orts:', place.name)?.trim().slice(0, 40);
+        if (!name || name === place.name) return;
+        if (places.some((p) => p.name.toLowerCase() === name.toLowerCase())) { toast('Diesen Ort gibt es schon.'); return; }
+        const { error } = await supabase.from('shopping_places').update({ name }).eq('id', place.id);
+        if (error) { toast(error.message); return; }
+        place.name = name;
+        placesChanged();
+      };
+    });
+    app.querySelectorAll('[data-delete-place]').forEach((b) => {
+      b.onclick = async () => {
+        if (needPlacesTable()) return;
+        const place = places.find((p) => p.id === b.dataset.deletePlace);
+        const { value } = await openSheet(`<h2>„${esc(place.name)}“ löschen?</h2>
+          <p class="hint">Der Ort verschwindet bei allen Zutaten.</p>
+          <div class="row"><button class="btn danger" value="ok">Löschen</button>
+            <button class="btn ghost" value="cancel" formnovalidate>Abbrechen</button></div>`);
+        if (value !== 'ok') return;
+        const { error } = await supabase.from('shopping_places').delete().eq('id', place.id);
+        if (error) { toast(error.message); return; }
+        places = places.filter((p) => p !== place);
+        placesChanged();
+      };
+    });
+  };
+  drawPlaces();
+  $('#add-place').onsubmit = async (e) => {
+    e.preventDefault();
+    const input = e.target.place;
+    const name = input.value.trim().slice(0, 40);
+    if (!name || needPlacesTable()) return;
+    if (places.some((p) => p.name.toLowerCase() === name.toLowerCase())) { toast('Diesen Ort gibt es schon.'); return; }
+    const place = { id: crypto.randomUUID(), name };
+    const { error } = await supabase.from('shopping_places').insert({ ...place, position: places.length });
+    if (error) { toast(error.message); return; }
+    places.push(place);
+    input.value = '';
+    placesChanged();
   };
 
   $('#list-select').onchange = async (e) => {
@@ -1707,6 +1864,10 @@ async function renderShopping(listId) {
     .subscribe();
   onListVisible = () => { if (document.visibilityState === 'visible') reload(); };
   document.addEventListener('visibilitychange', onListVisible);
+}
+
+function placeFilter() {
+  try { return localStorage.getItem('kochbuch.listPlace') || ''; } catch { return ''; }
 }
 
 function shoppingSort() {
@@ -2132,7 +2293,7 @@ if (isConfigured) {
     const userChanged = newSession?.user?.id !== session?.user?.id;
     session = newSession;
     if (event === 'PASSWORD_RECOVERY') recoveringPassword = true;
-    if (userChanged) { recipes = null; myName = undefined; categories = null; cookbookCache.clear(); }
+    if (userChanged) { recipes = null; myName = undefined; categories = null; places = null; cookbookCache.clear(); }
     // Nur bei echten Wechseln neu zeichnen, nicht beim stillen Token-Refresh.
     if (userChanged || event === 'PASSWORD_RECOVERY' || event === 'SIGNED_OUT') setTimeout(render);
   });

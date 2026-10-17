@@ -383,7 +383,8 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 0.35); }
 .year-table td.store, .legend.store { background: #c9b98f; }
 .legend { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-left: 6px; }
 
-.list-head #item-sort { flex: none; width: auto; font-size: 0.9rem; font-weight: 400; }
+.list-head #item-sort, .list-head #place-filter { flex: none; width: auto; font-size: 0.9rem; font-weight: 400; }
+.list-head #place-filter { flex: 1 1 100%; order: 1; }
 .shop-items li.group-head {
   padding: 8px 12px 4px; background: var(--surface-2);
   font-size: 0.8rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em;
@@ -422,3 +423,9 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 0.35); }
 .nutrition { display: grid; grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr)); gap: 10px 16px; margin: 0; }
 .nutrition dt { color: var(--muted); font-size: 0.85rem; }
 .nutrition dd { margin: 0; font-weight: 600; }
+
+/* Einkaufsorte */
+.place-link { display: block; margin-top: 2px; font-size: 0.8rem; color: var(--muted); text-align: left; }
+.place-checks { grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); gap: 8px; }
+.place-checks .check { color: var(--text); font-size: 1rem; align-items: center; }
+#place-list .row { gap: 12px; }
