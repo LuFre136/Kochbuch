@@ -57,7 +57,7 @@ export function sameItem(a, b) {
   return key !== '' && key === itemKey(b.name) && unitsCompatible(a.unit, b.unit);
 }
 
-// Zutaten der eingeplanten Rezepte, auf die geplante Personenzahl umgerechnet.
+// Zutaten der eingeplanten Rezepte, auf die geplanten Portionen umgerechnet.
 // entries: [{ plan_id, recipe, servings }]. Gleiche Zutaten werden direkt zusammengefasst.
 // Grundzutaten (Salz, Pfeffer, Wasser, Öl, Zucker) hat man im Haus; sie kommen nicht auf die Liste.
 export function additionsFromPlan(entries) {

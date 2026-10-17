@@ -25,7 +25,7 @@ export function mentionsIngredient(text, name) {
 // Schlüssel zum Vergleichen zweier Zutaten: gleicher Name, egal ob Einzahl oder Mehrzahl.
 export const ingredientKey = (ing) => nameWords(ing?.name ?? '').join(' ');
 
-// Rechnet eine Zutat auf eine andere Personenzahl um.
+// Rechnet eine Zutat auf eine andere Anzahl Portionen um.
 export function scaleIngredient(ing, factor) {
   if (factor === 1 || ing.amount == null) return { ...ing };
   const round = (n) => (n == null ? null : Math.round(n * factor * 100) / 100);
@@ -33,7 +33,7 @@ export function scaleIngredient(ing, factor) {
 }
 
 // Die Zutaten eines Rezepts, die in diesem Schritt vorkommen und im neuen Rezept noch
-// fehlen, umgerechnet auf die Personenzahl des neuen Rezepts.
+// fehlen, umgerechnet auf die Portionen des neuen Rezepts.
 export function ingredientsFromStep(text, recipe, have, servings) {
   const known = new Set(have.map(ingredientKey));
   const factor = servings / (recipe.servings || servings);
