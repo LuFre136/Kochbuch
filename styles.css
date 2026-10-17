@@ -241,7 +241,7 @@ legend { font-weight: 600; padding: 0 4px; }
 .step-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; font-weight: 600; font-size: 0.9rem; }
 .step-edit textarea { resize: none; overflow: hidden; }
 .step-time { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 0.85rem; color: var(--muted); }
-.step-time input { width: 6rem; }
+.step-time input { width: 4.5rem; }
 .danger-link { color: var(--danger); font-size: 0.875rem; }
 #step-add { justify-self: start; }
 
@@ -313,7 +313,8 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 0.35); }
 @media (prefers-color-scheme: dark) { .on-list { color: #7cc78a; } }
 
 /* Einkaufsliste */
-.list-head { display: flex; gap: 8px; margin: 4px 0 12px; }
+.list-head { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 12px; }
+.list-head #list-select { flex: 1 1 100%; }
 .list-head select {
   flex: 1; min-width: 0; min-height: 44px; padding: 0 12px;
   border: 1px solid var(--border); border-radius: 10px;
@@ -326,10 +327,14 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 0.35); }
   list-style: none; padding: 0; margin: 0 0 16px;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
 }
-.shop-items li { display: flex; align-items: center; gap: 4px; padding: 2px 4px 2px 12px; border-bottom: 1px solid var(--border); }
+.shop-items li { border-bottom: 1px solid var(--border); }
 .shop-items li:last-child { border-bottom: 0; }
+.shop-items li:first-child, .shop-items li:first-child .shop-row { border-top-left-radius: var(--radius); border-top-right-radius: var(--radius); }
+.shop-items li:last-child, .shop-items li:last-child .shop-row { border-bottom-left-radius: var(--radius); border-bottom-right-radius: var(--radius); }
+.shop-row { display: flex; align-items: center; gap: 4px; padding: 2px 4px 2px 12px; background: var(--surface); }
 .shop-items .empty-list { padding: 14px; }
-.shop-check { flex: 1; display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; font-weight: 400; font-size: 1rem; cursor: pointer; }
+.shop-check { flex: 1; display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; font-weight: 400; font-size: 1rem; }
+.shop-check input { cursor: pointer; }
 .shop-check input { width: 22px; height: 22px; margin: 1px 0 0; flex: none; accent-color: var(--accent); }
 .shop-check small { display: block; color: var(--muted); font-size: 0.8rem; }
 .shop-check .qty { font-weight: 600; }
@@ -340,7 +345,8 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 0.35); }
 }
 .icon-btn:hover, .icon-btn:focus-visible { background: var(--surface-2); color: var(--text); }
 .done-head { margin: 8px 0; }
-.list-settings { margin-top: 8px; }
+.list-settings { margin: 0 0 12px; }
+.list-head #manage { flex: none; }
 .choices { display: grid; gap: 10px; }
 .choices .check { color: var(--text); font-size: 1rem; }
 .sheet-form p { margin: 0; }
@@ -384,3 +390,18 @@ dialog.sheet::backdrop { background: rgb(0 0 0 / 0.35); }
 .season-recipes .check { margin-bottom: 10px; }
 #pantry-tags .tag-filter { margin: 0 0 4px; }
 #season-tags .tag-filter { margin-bottom: 12px; }
+
+/* Wischen: Aktionen liegen hinter dem Element und werden beim seitlichen Wischen sichtbar. */
+.swipe { position: relative; overflow: hidden; border-radius: var(--radius); }
+.shop-items .swipe { border-radius: 0; }
+.swipe > .card, .swipe > .shop-row { position: relative; z-index: 1; touch-action: pan-y; }
+.swipe-actions { position: absolute; inset: 0 auto 0 0; display: none; }
+.swipe-actions.end { inset: 0 0 0 auto; }
+.swipe.show-start .swipe-actions.start, .swipe.show-end .swipe-actions.end { display: flex; }
+.swipe-btn {
+  min-width: 92px; padding: 0 14px; border: 0; background: var(--surface-2); color: var(--text);
+  font: inherit; font-weight: 600; font-size: 0.9rem; cursor: pointer;
+}
+.swipe-btn.accent { background: var(--accent); color: var(--accent-text); }
+.swipe-btn.danger { background: var(--danger); color: #fff; }
+.list-settings[hidden] { display: none; }

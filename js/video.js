@@ -74,11 +74,3 @@ export function formatTime(seconds) {
   const s = String(seconds % 60).padStart(2, '0');
   return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
 }
-
-// "2:15", "1:02:03" oder "135" in Sekunden; leer oder ungültig → null.
-export function parseTime(raw) {
-  const s = String(raw ?? '').trim();
-  if (!s) return null;
-  if (!/^\d+(:\d{1,2}){0,2}$/.test(s)) return null;
-  return s.split(':').reduce((sum, part) => sum * 60 + Number(part), 0);
-}

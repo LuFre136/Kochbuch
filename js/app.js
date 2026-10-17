@@ -8,7 +8,7 @@ import {
 } from './shopping.js';
 import { PRODUCE, MONTHS, seasonOf, inSeason, seasonalRecipes } from './season.js';
 import {
-  videoOf, embedUrl, seekTo, stepText, stepTime, makeStep, formatTime, parseTime,
+  videoOf, embedUrl, seekTo, stepText, stepTime, makeStep, formatTime,
 } from './video.js';
 
 const app = document.getElementById('app');
@@ -18,6 +18,7 @@ const tabbar = document.getElementById('tabbar');
 let session = null;
 let recipes = null; // Cache aller eigenen Rezepte
 let listQuery = '';
+let myName; // Benutzername: undefined = noch nicht geladen, null = fehlt noch, false = benutzername.sql nicht eingerichtet
 let activeTag = null;
 let listSort = 'name';
 let recoveringPassword = false;
@@ -120,6 +121,8 @@ async function render() {
   }
   renderNav();
   return guarded(async () => {
+    if (myName === undefined) myName = await loadMyName();
+    if (myName === null) { renderUsername(); return; }
     if (!first) await renderList();
     else if (first === 'geteilt') await renderSharing();
     else if (first === 'plan') await renderPlan();
@@ -161,6 +164,59 @@ function renderNav() {
   };
 }
 
+// ---------- Benutzername ----------
+
+const USERNAME_RE = /^[A-Za-z0-9ÄÖÜäöüß ._-]{3,30}$/;
+const USERNAME_HINT = '3 bis 30 Zeichen: Buchstaben, Ziffern, Leerzeichen, Punkt, Binde- und Unterstrich.';
+
+// Lädt den eigenen Benutzernamen. Wurde bei der Registrierung einer angegeben, wird er jetzt gespeichert.
+async function loadMyName() {
+  const { data, error } = await supabase.from('profiles').select('username').eq('user_id', session.user.id).maybeSingle();
+  if (error) return false; // Tabelle fehlt noch: ohne Benutzernamen weitermachen
+  if (data) return data.username;
+  const wanted = String(session.user.user_metadata?.username ?? '').trim();
+  if (USERNAME_RE.test(wanted)) {
+    const { error: insertError } = await supabase.from('profiles').insert({ username: wanted });
+    if (!insertError) return wanted;
+  }
+  return null;
+}
+
+async function saveMyName(name) {
+  const username = name.trim().replace(/\s+/g, ' ');
+  if (!USERNAME_RE.test(username)) return USERNAME_HINT;
+  const { error } = await supabase.from('profiles').upsert({ user_id: session.user.id, username });
+  if (error) return error.code === '23505' ? 'Dieser Benutzername ist schon vergeben.' : error.message;
+  myName = username;
+  return '';
+}
+
+// Ohne Benutzernamen geht es nicht weiter: andere sehen beim Teilen nur diesen Namen.
+function renderUsername() {
+  tabbar.hidden = true;
+  app.innerHTML = `
+    <form class="auth card-panel" id="username-form">
+      <h1>Wähle einen Benutzernamen</h1>
+      <p class="hint">Wenn du Rezepte, dein Kochbuch oder Einkaufslisten teilst, sehen andere nur diesen Namen, nicht deine E-Mail-Adresse.</p>
+      <label>Benutzername <input name="username" required minlength="3" maxlength="30" autocomplete="username" autocapitalize="off"></label>
+      <small class="hint">${USERNAME_HINT}</small>
+      <button class="btn primary">Speichern</button>
+      <p class="hint" id="msg" role="status"></p>
+    </form>`;
+  const form = $('#username-form');
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const problem = await saveMyName(form.username.value);
+    if (problem) { $('#msg').textContent = problem; return; }
+    toast(`Hallo ${myName}!`);
+    render();
+  };
+}
+
+const ownerName = (o) => o.owner_name ?? o.owner_email;
+const readerName = (p) => p.reader_name ?? p.reader_email;
+const personName = (p) => p.name ?? p.email;
+
 // ---------- Ansichten ----------
 
 function renderSetup() {
@@ -180,6 +236,7 @@ function renderLogin(hint = '') {
       ${hint ? `<p class="hint">${esc(hint)}</p>` : ''}
       <label>E-Mail <input type="email" name="email" autocomplete="email" required></label>
       <label>Passwort <input type="password" name="password" autocomplete="current-password" minlength="6" required></label>
+      <label>Benutzername <small>(nur beim Registrieren)</small> <input name="username" maxlength="30" autocomplete="username" autocapitalize="off"></label>
       <div class="row">
         <button class="btn primary" name="mode" value="login">Anmelden</button>
         <button class="btn" name="mode" value="signup">Registrieren</button>
@@ -198,8 +255,10 @@ function renderLogin(hint = '') {
     form.querySelectorAll('button').forEach((b) => { b.disabled = true; });
     try {
       if (mode === 'signup') {
+        const username = form.username.value.trim().replace(/\s+/g, ' ');
+        if (!USERNAME_RE.test(username)) throw new Error(`Bitte einen Benutzernamen angeben. ${USERNAME_HINT}`);
         const { data, error } = await supabase.auth.signUp({
-          email, password, options: { emailRedirectTo: location.origin + location.pathname },
+          email, password, options: { emailRedirectTo: location.origin + location.pathname, data: { username } },
         });
         if (error) throw error;
         if (!data.session) msg.textContent = 'Fast geschafft: Bitte bestätige deine E-Mail-Adresse über den Link in der Mail und melde dich dann an.';
@@ -523,8 +582,26 @@ async function renderList() {
     const shown = all.filter((r) => (!activeTag || r.tags.includes(activeTag))
       && (!q || [r.title, r.description, ...r.tags].some((s) => s.toLowerCase().includes(q))));
     if (listSort === 'rating') shown.sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0) || collator.compare(a.title, b.title));
-    results.innerHTML = shown.length ? shown.map((r) => recipeCard(r)).join('')
+    results.innerHTML = shown.length ? shown.map((r) => `<div class="swipe" data-id="${r.id}">
+        <div class="swipe-actions start"><button type="button" class="swipe-btn danger" data-act="delete">Löschen</button></div>
+        <div class="swipe-actions end"><button type="button" class="swipe-btn" data-act="plan">Einplanen</button><button type="button" class="swipe-btn accent" data-act="share">Teilen</button></div>
+        ${recipeCard(r)}</div>`).join('')
       : '<p class="hint">Keine passenden Rezepte gefunden.</p>';
+    results.querySelectorAll('.swipe').forEach((el) => enableSwipe(el, el.querySelector('.card')));
+  };
+  // Wischen nach links: Einplanen und Teilen; nach rechts: Löschen.
+  results.onclick = async (e) => {
+    const btn = e.target.closest('[data-act]');
+    if (!btn) return;
+    const el = btn.closest('.swipe');
+    const r = all.find((x) => x.id === el.dataset.id);
+    closeSwipes();
+    if (btn.dataset.act === 'plan') await planRecipe(r);
+    if (btn.dataset.act === 'share') await shareRecipe(r);
+    if (btn.dataset.act === 'delete' && await deleteRecipe(r)) {
+      all.splice(all.indexOf(r), 1);
+      if (all.length) draw(); else renderList();
+    }
   };
   $('#q').oninput = (e) => { listQuery = e.target.value; draw(); };
   $('#sort').onchange = (e) => { listSort = e.target.value; draw(); };
@@ -536,6 +613,80 @@ async function renderList() {
     };
   });
   draw();
+}
+
+// Macht ein Element seitlich wischbar. Hinter ihm liegen .swipe-actions.start (links,
+// sichtbar beim Wischen nach rechts) und/oder .swipe-actions.end (rechts, beim Wischen nach links).
+let openSwipe = null;
+
+function closeSwipes() {
+  if (openSwipe) { openSwipe.close(); openSwipe = null; }
+}
+
+document.addEventListener('pointerdown', (e) => {
+  if (openSwipe && !openSwipe.el.contains(e.target)) closeSwipes();
+});
+
+function enableSwipe(el, front) {
+  const start = el.querySelector('.swipe-actions.start');
+  const end = el.querySelector('.swipe-actions.end');
+  let x0 = 0, y0 = 0, dx = 0, base = 0, active = false, decided = false, moved = false;
+  const set = (x, animate) => {
+    front.style.transition = animate ? 'transform 0.2s ease' : 'none';
+    front.style.transform = x ? `translateX(${x}px)` : '';
+    el.classList.toggle('show-start', x > 0);
+    el.classList.toggle('show-end', x < 0);
+  };
+  const self = { el, close: () => { base = 0; set(0, true); } };
+  front.addEventListener('dragstart', (e) => e.preventDefault()); // Links und Bilder nicht herausziehen
+  front.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    x0 = e.clientX; y0 = e.clientY; dx = 0; active = true; decided = false; moved = false;
+  });
+  front.addEventListener('pointermove', (e) => {
+    if (!active) return;
+    const mx = e.clientX - x0;
+    const my = e.clientY - y0;
+    if (!decided) {
+      if (Math.abs(mx) < 8 && Math.abs(my) < 8) return;
+      decided = true;
+      if (Math.abs(my) > Math.abs(mx)) { active = false; return; } // senkrecht: normal scrollen
+      moved = true;
+      front.setPointerCapture(e.pointerId);
+      if (openSwipe && openSwipe !== self) closeSwipes();
+    }
+    let x = base + mx;
+    if (x > 0 && !start) x = 0;
+    if (x < 0 && !end) x = 0;
+    const limit = (x > 0 ? start : end)?.offsetWidth ?? 0;
+    if (Math.abs(x) > limit) x = Math.sign(x) * (limit + (Math.abs(x) - limit) * 0.3);
+    dx = x;
+    set(x, false);
+  });
+  const finish = () => {
+    if (!active) return;
+    active = false;
+    if (!moved) return;
+    const panel = dx > 0 ? start : dx < 0 ? end : null;
+    if (panel && Math.abs(dx) > 50) {
+      base = Math.sign(dx) * panel.offsetWidth;
+      set(base, true);
+      openSwipe = self;
+    } else {
+      self.close();
+      if (openSwipe === self) openSwipe = null;
+    }
+  };
+  front.addEventListener('pointerup', finish);
+  front.addEventListener('pointercancel', finish);
+  // Nach dem Wischen keinen Klick auslösen (sonst öffnet sich das Rezept).
+  front.addEventListener('click', (e) => {
+    if (!moved && !base) return;
+    e.preventDefault();
+    e.stopPropagation();
+    moved = false;
+    if (base) { self.close(); openSwipe = null; } // Tipp auf ein geöffnetes Element schließt es wieder
+  }, true);
 }
 
 function recipeCard(r, href = `#/r/${r.id}`) {
@@ -667,18 +818,8 @@ function showRecipe(r, { own, back, backLabel, from = '' }) {
   setupPlanning(r, () => servings);
 
   $('#share').onclick = async () => {
-    try {
-      if (!r.share_token) {
-        const token = crypto.randomUUID();
-        const { error } = await supabase.from('recipes').update({ share_token: token }).eq('id', r.id);
-        if (error) throw error;
-        r.share_token = token;
-      }
-      await shareLink(appUrl(`teilen/${r.share_token}`), r.title);
-      showRecipe(r, { own, back, backLabel });
-    } catch (err) {
-      toast(`Teilen fehlgeschlagen: ${err.message}`);
-    }
+    const hadToken = Boolean(r.share_token);
+    if (await shareRecipe(r) && !hadToken) showRecipe(r, { own, back, backLabel });
   };
   const unshare = $('#unshare');
   if (unshare) {
@@ -693,14 +834,40 @@ function showRecipe(r, { own, back, backLabel, from = '' }) {
   }
 
   $('#del').onclick = async () => {
-    if (!confirm(`„${r.title}“ wirklich löschen?`)) return;
-    const { error } = await supabase.from('recipes').delete().eq('id', r.id);
-    if (error) { toast(error.message); return; }
-    if (r.images.length) await supabase.storage.from(IMAGE_BUCKET).remove(r.images);
-    recipes = recipes.filter((x) => x.id !== r.id);
-    toast('Rezept gelöscht');
-    location.hash = '#/';
+    if (await deleteRecipe(r)) location.hash = '#/';
   };
+}
+
+// Erzeugt bei Bedarf einen Teilen-Link und öffnet das Teilen-Menü. Liefert true bei Erfolg.
+async function shareRecipe(r) {
+  try {
+    if (!r.share_token) {
+      const token = crypto.randomUUID();
+      const { error } = await supabase.from('recipes').update({ share_token: token }).eq('id', r.id);
+      if (error) throw error;
+      r.share_token = token;
+    }
+    await shareLink(appUrl(`teilen/${r.share_token}`), r.title);
+    return true;
+  } catch (err) {
+    toast(`Teilen fehlgeschlagen: ${err.message}`);
+    return false;
+  }
+}
+
+// Fragt nach und löscht ein eigenes Rezept samt Bildern. Liefert true, wenn gelöscht wurde.
+async function deleteRecipe(r) {
+  const { value } = await openSheet(`<h2>„${esc(r.title)}“ löschen?</h2>
+    <p>Das Rezept und seine Bilder werden endgültig gelöscht.</p>
+    <div class="row"><button class="btn danger" value="delete">Löschen</button>
+      <button class="btn ghost" value="cancel">Abbrechen</button></div>`);
+  if (value !== 'delete') return false;
+  const { error } = await supabase.from('recipes').delete().eq('id', r.id);
+  if (error) { toast(error.message); return false; }
+  if (r.images.length) await supabase.storage.from(IMAGE_BUCKET).remove(r.images);
+  recipes = recipes.filter((x) => x.id !== r.id);
+  toast('Rezept gelöscht');
+  return true;
 }
 
 async function renderEditor(id) {
@@ -835,17 +1002,20 @@ async function renderEditor(id) {
       <div class="step-head"><span>Schritt ${i + 1}</span>
         ${steps.length > 1 ? `<button type="button" class="link danger-link" data-remove="${i}">Entfernen</button>` : ''}</div>
       <textarea data-step="${i}" rows="2" aria-label="Schritt ${i + 1}">${esc(st.text)}</textarea>
-      ${hasVideo ? `<label class="step-time">Stelle im Video <input data-time="${i}" inputmode="numeric" placeholder="m:ss" value="${formatTime(st.t)}" aria-label="Stelle im Video für Schritt ${i + 1}"></label>` : ''}
+      ${hasVideo ? `<div class="step-time" data-time="${i}"><span>Stelle im Video</span>
+        <input type="number" name="min" min="0" max="600" inputmode="numeric" placeholder="0" value="${st.t == null ? '' : Math.floor(st.t / 60)}" aria-label="Minuten für Schritt ${i + 1}"> Min.
+        <input type="number" name="sec" min="0" max="59" inputmode="numeric" placeholder="0" value="${st.t == null ? '' : st.t % 60}" aria-label="Sekunden für Schritt ${i + 1}"> Sek.</div>` : ''}
     </li>`).join('');
     stepList.querySelectorAll('textarea').forEach((ta) => {
       grow(ta);
       ta.oninput = () => { steps[Number(ta.dataset.step)].text = ta.value; grow(ta); };
     });
-    stepList.querySelectorAll('[data-time]').forEach((input) => {
-      input.oninput = () => {
-        const t = parseTime(input.value);
-        input.setCustomValidity(input.value.trim() && t == null ? 'Bitte als Minuten:Sekunden eingeben, z. B. 2:15' : '');
-        steps[Number(input.dataset.time)].t = t;
+    stepList.querySelectorAll('[data-time]').forEach((box) => {
+      const [min, sec] = box.querySelectorAll('input');
+      box.oninput = () => {
+        const m = Math.max(0, Math.floor(Number(min.value) || 0));
+        const s = Math.max(0, Math.floor(Number(sec.value) || 0));
+        steps[Number(box.dataset.time)].t = min.value === '' && sec.value === '' ? null : m * 60 + s;
       };
     });
     stepList.querySelectorAll('[data-remove]').forEach((b) => {
@@ -946,32 +1116,29 @@ function setupPlanning(r, currentServings) {
   };
   drawPlanned();
 
-  $('#plan-btn').onclick = () => {
-    const dialog = document.createElement('dialog');
-    dialog.className = 'sheet';
-    dialog.innerHTML = `<form method="dialog" class="sheet-form">
-      <h2>„${esc(r.title)}“ einplanen</h2>
-      <label>Datum <input type="date" name="date" required min="${today()}" value="${today()}"></label>
-      <label>Personen <input type="number" name="servings" min="1" max="100" required value="${currentServings()}"></label>
-      <div class="row">
-        <button class="btn primary" value="ok">Einplanen</button>
-        <button class="btn ghost" value="cancel" formnovalidate>Abbrechen</button>
-      </div>
-    </form>`;
-    document.body.append(dialog);
-    dialog.addEventListener('close', async () => {
-      const form = dialog.querySelector('form');
-      if (dialog.returnValue === 'ok') {
-        const { error } = await supabase.from('meal_plan').insert({
-          recipe_id: r.id, planned_for: form.date.value, servings: Number(form.servings.value),
-        });
-        if (error) toast(error.message);
-        else { toast(`Eingeplant für ${formatDay(form.date.value)}`); drawPlanned(); }
-      }
-      dialog.remove();
-    });
-    dialog.showModal();
-  };
+  $('#plan-btn').onclick = async () => { if (await planRecipe(r, currentServings())) drawPlanned(); };
+}
+
+// Dialog zum Einplanen; setzt die Zutaten auf Wunsch gleich auf die Einkaufsliste.
+// Liefert true, wenn eingeplant wurde.
+async function planRecipe(r, servings = r.servings) {
+  const { value, form } = await openSheet(`<h2>„${esc(r.title)}“ einplanen</h2>
+    <label>Datum <input type="date" name="date" required min="${today()}" value="${today()}"></label>
+    <label>Personen <input type="number" name="servings" min="1" max="100" required value="${servings}"></label>
+    ${r.ingredients.length ? '<label class="check"><input type="checkbox" name="shop" checked> Zutaten auf die Einkaufsliste setzen</label>' : ''}
+    <div class="row">
+      <button class="btn primary" value="ok">Einplanen</button>
+      <button class="btn ghost" value="cancel" formnovalidate>Abbrechen</button>
+    </div>`);
+  if (value !== 'ok') return false;
+  const count = Math.max(1, Math.min(100, Number(form.servings.value) || r.servings));
+  const { data, error } = await supabase.from('meal_plan').insert({
+    recipe_id: r.id, planned_for: form.date.value, servings: count,
+  }).select().single();
+  if (error) { toast(error.message); return false; }
+  toast(`Eingeplant für ${formatDay(form.date.value)}`);
+  if (form.shop?.checked) await addPlanToList([{ plan_id: data.id, recipe: r, servings: count }]);
+  return true;
 }
 
 async function renderPlan() {
@@ -1199,20 +1366,13 @@ async function renderShopping(listId) {
         ${lists.map((l) => `<option value="${l.id}"${l.id === list.id ? ' selected' : ''}>${esc(listLabel(l))}</option>`).join('')}
         <option value="new">+ Neue Liste …</option>
       </select>
+      <button class="btn small" id="manage" aria-expanded="false" aria-controls="list-settings">Verwalten</button>
       <select id="item-sort" aria-label="Sortierung">
         ${[['added', 'Hinzugefügt'], ['name', 'A–Z'], ['recipe', 'Nach Rezept']].map(([v, l]) => `<option value="${v}"${shoppingSort() === v ? ' selected' : ''}>${l}</option>`).join('')}
       </select>
     </div>
-    <form class="import-row add-item" id="add-item">
-      <input name="item" placeholder="z. B. 1 l Milch" autocomplete="off" enterkeyhint="done" aria-label="Eintrag hinzufügen">
-      <button class="btn">Hinzufügen</button>
-    </form>
-    <div id="list-recipes"></div>
-    <ul class="shop-items" id="open-items"></ul>
-    <div id="done-items"></div>
-
-    <section class="card-panel share-section list-settings">
-      <h2>Liste verwalten</h2>
+    <section class="card-panel share-section list-settings" id="list-settings" hidden>
+      <h2>${isOwner ? 'Liste verwalten' : 'Geteilte Liste'}</h2>
       ${isOwner ? `
         <div class="row">
           <button class="btn" id="rename">Umbenennen</button>
@@ -1225,22 +1385,33 @@ async function renderShopping(listId) {
           <button class="btn primary" id="list-invite">${list.invite_token ? 'Einladungslink teilen' : 'Einladungslink erstellen'}</button>
           ${list.invite_token ? '<button class="btn ghost" id="list-invite-reset">Neuen Link erzeugen</button>' : ''}
         </div>
-        ${members.length ? `<ul class="people">${members.map((p) => `<li><span>${esc(p.email)}</span>
+        ${members.length ? `<ul class="people">${members.map((p) => `<li><span>${esc(personName(p))}</span>
           <button class="link danger-link" data-member="${p.user_id}">Entfernen</button></li>`).join('')}</ul>` : ''}`
-    : `<p class="hint">Geteilt von ${esc(owner?.email ?? 'jemand anderem')}${members.length > 1 ? ` mit ${members.filter((p) => p.user_id !== me).map((p) => esc(p.email)).join(', ')}` : ''}.</p>
-        <div class="row"><button class="btn danger" id="leave-list">Liste verlassen</button></div>`}
-    </section>`;
+    : `<p class="hint">Geteilt von ${esc(owner ? personName(owner) : 'jemand anderem')}${members.length > 1 ? ` mit ${members.filter((p) => p.user_id !== me).map((p) => esc(personName(p))).join(', ')}` : ''}.</p>
+        <div class="row"><button class="btn danger" id="leave-list">Austreten</button></div>`}
+    </section>
+    <form class="import-row add-item" id="add-item">
+      <input name="item" placeholder="z. B. 1 l Milch" autocomplete="off" enterkeyhint="done" aria-label="Eintrag hinzufügen">
+      <button class="btn">Hinzufügen</button>
+    </form>
+    <div id="list-recipes"></div>
+    <ul class="shop-items" id="open-items"></ul>
+    <div id="done-items"></div>`;
 
   const draw = () => {
     const sort = shoppingSort();
     const sorted = sortItems(items, sort);
     const open = sorted.filter((i) => !i.checked);
     const done = sorted.filter((i) => i.checked);
-    const row = (i) => `<li class="${i.checked ? 'done' : ''}">
-      <label class="shop-check"><input type="checkbox" data-check="${i.id}" ${i.checked ? 'checked' : ''}>
-        <span><span class="qty">${esc(formatItemQuantity(i))}</span> ${esc(i.name)}
-        ${i.sources?.length ? `<small>${esc(sourceTitles(i.sources))}${i.manual ? ' + von Hand' : ''}</small>` : ''}</span></label>
-      <button class="icon-btn" data-del="${i.id}" aria-label="${esc(i.name)} löschen">×</button></li>`;
+    // Abhaken nur über die Checkbox; nach rechts wischen zeigt „Menge ändern“.
+    const row = (i) => `<li class="swipe${i.checked ? ' done' : ''}" data-item="${i.id}">
+      <div class="swipe-actions start"><button type="button" class="swipe-btn accent" data-amount="${i.id}">Menge ändern</button></div>
+      <div class="shop-row">
+        <div class="shop-check"><input type="checkbox" data-check="${i.id}" ${i.checked ? 'checked' : ''} aria-label="${esc(i.name)} abhaken">
+          <span><span class="qty">${esc(formatItemQuantity(i))}</span> ${esc(i.name)}
+          ${i.sources?.length ? `<small>${esc(sourceTitles(i.sources))}${i.manual ? ' + von Hand' : ''}</small>` : ''}</span></div>
+        <button class="icon-btn" data-del="${i.id}" aria-label="${esc(i.name)} löschen">×</button>
+      </div></li>`;
     // Nach Rezept: Zwischenüberschriften, sobald ein neues Rezept beginnt.
     const rows = (list) => list.map((item, i) => {
       const group = groupOf(item);
@@ -1256,6 +1427,28 @@ async function renderShopping(listId) {
     $('#list-recipes').innerHTML = recs.length ? `<p class="hint">Aus Rezepten:</p><div class="chips static">${recs.map((r) => `<span class="chip tag-chip">${esc(r.title)}
       <button type="button" data-recipe="${esc(r.recipe_id)}" aria-label="${esc(r.title)} von der Liste nehmen">×</button></span>`).join('')}</div>` : '';
 
+    app.querySelectorAll('.shop-items .swipe').forEach((el) => enableSwipe(el, el.querySelector('.shop-row')));
+    app.querySelectorAll('[data-amount]').forEach((b) => {
+      b.onclick = async () => {
+        closeSwipes();
+        const item = items.find((i) => i.id === b.dataset.amount);
+        const { value, form } = await openSheet(`<h2>Menge für ${esc(item.name)}</h2>
+          <label>Menge <input name="qty" value="${esc(formatItemQuantity(item))}" placeholder="z. B. 500 g oder 3" autocomplete="off" enterkeyhint="done"></label>
+          <p class="hint">Leer lassen für „ohne Menge“.</p>
+          <div class="row"><button class="btn primary" value="ok">Speichern</button>
+            <button class="btn ghost" value="cancel" formnovalidate>Abbrechen</button></div>`);
+        if (value !== 'ok') return;
+        const text = form.qty.value.trim();
+        const parsed = text ? parseIngredientLine(`${text} ${item.name}`) : { amount: null, unit: null };
+        if (text && parsed.amount == null) { toast('Die Menge wurde nicht erkannt, z. B. „500 g“ oder „3“.'); return; }
+        // Von Hand geänderte Mengen bleiben stehen, wenn das Rezept später von der Liste genommen wird.
+        const patch = { amount: parsed.amountMax ?? parsed.amount, unit: parsed.unit, manual: true };
+        Object.assign(item, patch);
+        draw();
+        const { error } = await supabase.from('shopping_items').update(patch).eq('id', item.id);
+        if (error) toast(error.message);
+      };
+    });
     app.querySelectorAll('[data-check]').forEach((box) => {
       box.onchange = async () => {
         const item = items.find((i) => i.id === box.dataset.check);
@@ -1343,6 +1536,11 @@ async function renderShopping(listId) {
   };
 
   const byId = (sel) => app.querySelector(sel);
+  byId('#manage').onclick = (e) => {
+    const box = byId('#list-settings');
+    box.hidden = !box.hidden;
+    e.currentTarget.setAttribute('aria-expanded', String(!box.hidden));
+  };
   if (byId('#rename')) {
     byId('#rename').onclick = async () => {
       const name = prompt('Neuer Name:', list.name)?.trim();
@@ -1387,7 +1585,7 @@ async function renderShopping(listId) {
   });
   if (byId('#leave-list')) {
     byId('#leave-list').onclick = async () => {
-      if (!confirm('Liste verlassen? Du brauchst dann einen neuen Einladungslink.')) return;
+      if (!confirm(`Aus „${list.name}“ austreten? Die Liste verschwindet dann bei dir. Um wieder mitzumachen, brauchst du einen neuen Einladungslink.`)) return;
       const { error } = await supabase.from('shopping_list_members').delete().eq('list_id', list.id).eq('user_id', me);
       if (error) { toast(error.message); return; }
       rememberList('');
@@ -1543,11 +1741,15 @@ async function renderSharing() {
   const { readers, owners } = people;
 
   app.innerHTML = `
-    
+    ${myName ? `<section class="card-panel share-section">
+      <h2>Dein Benutzername</h2>
+      <div class="row"><strong>${esc(myName)}</strong><button class="btn small" id="rename-me">Ändern</button></div>
+      <p class="hint">Diesen Namen sehen andere, wenn du etwas mit ihnen teilst.</p>
+    </section>` : ''}
     <section class="card-panel share-section">
       <h2>Mit mir geteilte Kochbücher</h2>
       ${owners.length ? `<ul class="people">${owners.map((o) => `<li>
-          <a href="#/kochbuch/${o.owner_id}">Kochbuch von ${esc(o.owner_email)}</a>
+          <a href="#/kochbuch/${o.owner_id}">Kochbuch von ${esc(ownerName(o))}</a>
           <button class="link danger-link" data-leave="${o.owner_id}">Verlassen</button>
         </li>`).join('')}</ul>`
         : '<p class="hint">Noch keine. Wenn dir jemand einen Einladungslink schickt, erscheint sein Kochbuch hier.</p>'}
@@ -1564,7 +1766,7 @@ async function renderSharing() {
         : '<button class="btn primary" id="invite-create">Einladungslink erstellen</button>'}
       <h3>Lesezugriff haben</h3>
       ${readers.length ? `<ul class="people">${readers.map((p) => `<li>
-          <span>${esc(p.reader_email)}</span>
+          <span>${esc(readerName(p))}</span>
           <button class="link danger-link" data-remove="${p.reader_id}">Entfernen</button>
         </li>`).join('')}</ul>` : '<p class="hint">Noch niemand.</p>'}
     </section>
@@ -1588,6 +1790,23 @@ async function renderSharing() {
     renderSharing();
   };
   const byId = (id) => app.querySelector(id);
+  if (byId('#rename-me')) {
+    byId('#rename-me').onclick = async () => {
+      let problem = '';
+      for (;;) {
+        const { value, form } = await openSheet(`<h2>Benutzername ändern</h2>
+          <label>Benutzername <input name="username" required minlength="3" maxlength="30" value="${esc(myName)}" autocapitalize="off"></label>
+          <p class="hint">${esc(problem || USERNAME_HINT)}</p>
+          <div class="row"><button class="btn primary" value="ok">Speichern</button>
+            <button class="btn ghost" value="cancel" formnovalidate>Abbrechen</button></div>`);
+        if (value !== 'ok') return;
+        problem = await saveMyName(form.username.value);
+        if (!problem) break;
+      }
+      toast('Benutzername gespeichert');
+      renderSharing();
+    };
+  }
   if (byId('#invite-create')) byId('#invite-create').onclick = () => createInvite(false);
   if (byId('#invite-share')) byId('#invite-share').onclick = () => shareLink(appUrl(`einladung/${token}`), 'Mein Kochbuch');
   if (byId('#invite-reset')) {
@@ -1644,7 +1863,7 @@ async function loadCookbook(ownerId) {
   if (error) throw error;
   const owner = people.owners.find((o) => o.owner_id === ownerId);
   if (!owner) return null;
-  const book = { email: owner.owner_email, recipes: data.sort((a, b) => collator.compare(a.title, b.title)) };
+  const book = { email: ownerName(owner), recipes: data.sort((a, b) => collator.compare(a.title, b.title)) };
   cookbookCache.set(ownerId, book);
   return book;
 }
@@ -1757,7 +1976,7 @@ if (isConfigured) {
     const userChanged = newSession?.user?.id !== session?.user?.id;
     session = newSession;
     if (event === 'PASSWORD_RECOVERY') recoveringPassword = true;
-    if (userChanged) { recipes = null; cookbookCache.clear(); }
+    if (userChanged) { recipes = null; myName = undefined; cookbookCache.clear(); }
     // Nur bei echten Wechseln neu zeichnen, nicht beim stillen Token-Refresh.
     if (userChanged || event === 'PASSWORD_RECOVERY' || event === 'SIGNED_OUT') setTimeout(render);
   });
