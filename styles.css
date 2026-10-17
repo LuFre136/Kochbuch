@@ -415,6 +415,17 @@ dialog.sheet.full {
 .pick-row .pick-mark { flex: none; color: var(--muted); font-size: 1.1rem; }
 .pick-row.on { border-color: var(--accent); }
 .pick-row.on .pick-mark { color: var(--accent); }
+.pick-tag-row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.pick-tag {
+  padding: 1px 7px; border: 1px solid var(--border); border-radius: 999px;
+  font-size: 0.75rem; color: var(--muted);
+}
+.pick-tag.match { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.pick-tags { align-items: center; margin-bottom: 12px; }
+.pick-tags .hint { flex: none; }
+.chip.small { padding: 4px 10px; font-size: 0.8rem; }
+.chip:disabled { opacity: 0.45; cursor: default; }
+.chip.ghost { border-style: dashed; color: var(--muted); }
 .pick-ask {
   display: grid; gap: 8px; padding: 10px 14px; margin-left: 14px;
   background: var(--surface-2); border: 1px dashed var(--border); border-radius: var(--radius);

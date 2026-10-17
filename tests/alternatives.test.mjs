@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   pairOf, alternativeIds, isLinked, alternativeGroup, suggestAlternatives, relatedAlternatives,
+  filterByTags, tagMatches,
 } from '../js/alternatives.js';
 
 const compare = new Intl.Collator('de', { sensitivity: 'base' }).compare;
@@ -64,4 +65,25 @@ test('findet die Alternativen der Alternativen („Verwandte“)', () => {
   // Was schon verknüpft ist, kommt nicht noch einmal; dafür jetzt e über c.
   assert.deepEqual(relatedAlternatives(links, 'a', ['b', 'c']), [{ id: 'd', via: 'b' }, { id: 'e', via: 'c' }]);
   assert.deepEqual(relatedAlternatives(links, 'a', []), []);
+});
+
+test('filterByTags findet Rezepte mit den gewählten Tags, die passendsten zuerst', () => {
+  const list = [
+    { id: 'a', title: 'Auflauf', tags: ['Ofen', 'Nudeln'] },
+    { id: 'b', title: 'Brot', tags: ['Ofen'] },
+    { id: 'c', title: 'Curry', tags: ['Pfanne'] },
+    { id: 'd', title: 'Dessert', tags: [] },
+  ];
+  assert.deepEqual(filterByTags(list, ['Ofen', 'Nudeln']).map((r) => r.id), ['a', 'b']);
+  // Groß/klein egal, und das eigene Rezept lässt sich ausnehmen.
+  assert.deepEqual(filterByTags(list, ['ofen'], { exclude: ['b'] }).map((r) => r.id), ['a']);
+  assert.deepEqual(filterByTags(list, []), []);
+  assert.deepEqual(filterByTags(list, ['Grill']), []);
+  assert.deepEqual(filterByTags(list, ['Ofen'], { limit: 1 }).map((r) => r.id), ['a']);
+});
+
+test('tagMatches liefert die passenden Tags eines Rezepts', () => {
+  assert.deepEqual(tagMatches(['Ofen', 'Nudeln'], ['nudeln', 'Grill']), ['Nudeln']);
+  assert.deepEqual(tagMatches(['Ofen'], []), []);
+  assert.deepEqual(tagMatches(undefined, ['Ofen']), []);
 });
