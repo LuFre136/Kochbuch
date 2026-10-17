@@ -846,7 +846,7 @@ function enableRecipeSwipe(el, go) {
   if (!el) return;
   let x0 = 0, y0 = 0, active = false, decided = false;
   el.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0 || e.target.closest('.gallery, .video, button, a, input, select, textarea')) return;
+    if (e.button !== 0 || e.target.closest('.media, .gallery, .video, button, a, input, select, textarea')) return;
     x0 = e.clientX; y0 = e.clientY; active = true; decided = false;
   });
   el.addEventListener('pointermove', (e) => {
@@ -933,18 +933,34 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
   let servings = r.servings;
   const sources = r.sources.map((u) => [u, safeUrl(u)]).filter(([, href]) => href);
   const videos = videosOf(r.sources);
-  // Es läuft immer nur ein Player; bei mehreren Videos schaltet die Leiste darüber um.
-  let shown = videos[0] ?? null;
   const videoLabel = (v) => (v.provider === 'youtube' ? 'YouTube' : 'TikTok');
+  // Oben steht immer genau eines: ein Video oder die Bilder. Die Leiste darüber schaltet um;
+  // beim Öffnen läuft das erste Video, die Bilder liegen in ihrem eigenen Reiter.
+  const tabs = [
+    ...videos.map((v, i) => ({
+      key: v.key, video: v,
+      label: videos.length > 1 ? `Video ${i + 1} · ${videoLabel(v)}` : `Video · ${videoLabel(v)}`,
+    })),
+    ...(r.images.length ? [{ key: 'bilder', label: r.images.length > 1 ? `Bilder (${r.images.length})` : 'Bild' }] : []),
+  ];
+  let shown = tabs[0] ?? null;
+  const galleryHtml = () => `<div class="gallery" id="gallery">${r.images.map((p) => `<img src="${esc(imageUrl(p))}" alt="">`).join('')}</div>
+    ${r.images.length > 1 ? `<div class="gallery-nav">
+      <button type="button" class="icon-btn" data-img="-1" aria-label="Vorheriges Bild">‹</button>
+      <span id="gallery-at" aria-live="polite">1 / ${r.images.length}</span>
+      <button type="button" class="icon-btn" data-img="1" aria-label="Nächstes Bild">›</button></div>` : ''}`;
+  const videoHtml = (v, start = null) => `<div class="video${v.vertical ? ' vertical' : ''}">
+    <iframe id="video" src="${esc(embedUrl(v, location.origin, start))}" title="Video zum Rezept"
+      allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`;
+  const mediaHtml = (t, start = null) => (t.video ? videoHtml(t.video, start) : galleryHtml());
 
   app.innerHTML = `
     <article class="recipe">
       ${back ? `<a class="back" href="${back}">← ${esc(backLabel)}</a>` : ''}
       ${from ? `<p class="hint from">${esc(from)}</p>` : ''}
-      ${r.images.length ? `<div class="gallery">${r.images.map((p) => `<img src="${esc(imageUrl(p))}" alt="">`).join('')}</div>` : ''}
-      ${shown ? `${videos.length > 1 ? `<div class="video-tabs" id="video-tabs" role="tablist">${videos.map((v, i) => `<button type="button" class="chip${i === 0 ? ' active' : ''}" data-video="${esc(v.key)}" role="tab" aria-selected="${i === 0}">Video ${i + 1} · ${videoLabel(v)}</button>`).join('')}</div>` : ''}
-      <div class="video${shown.vertical ? ' vertical' : ''}" id="video-box"><iframe id="video" src="${esc(embedUrl(shown, location.origin))}" title="Video zum Rezept"
-        allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>` : ''}
+      ${shown ? `${tabs.length > 1 ? `<div class="media-tabs" id="media-tabs" role="tablist">${tabs.map((t, i) => `<button type="button" class="chip${i === 0 ? ' active' : ''}"
+        data-media="${esc(t.key)}" role="tab" aria-selected="${i === 0}">${esc(t.label)}</button>`).join('')}</div>` : ''}
+      <div class="media" id="media-box">${mediaHtml(shown)}</div>` : ''}
       ${group.length > 1 ? `<nav class="alts" aria-label="Alternativrezepte">
         <p class="alt-title">${group.length - 1 === 1 ? 'Dieses Rezept hat eine Alternative' : `Dieses Rezept hat ${group.length - 1} Alternativen`}</p>
         <div class="alt-row">
@@ -1040,42 +1056,55 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
   });
   drawIngredients();
 
-  // Zeigt ein Video und springt dabei an eine Stelle. Läuft es schon, springt der Player
-  // selbst; sonst wird es neu geladen und springt, sobald es bereit ist.
-  const playVideo = (key, seconds = null) => {
-    const box = $('#video-box');
-    const next = videos.find((v) => v.key === key);
+  // Bilder: waagerecht durchwischen, Zähler und Pfeile für Rechner.
+  const bindGallery = () => {
+    const strip = $('#gallery');
+    if (!strip) return;
+    const at = $('#gallery-at');
+    if (at) {
+      strip.onscroll = () => {
+        at.textContent = `${Math.min(r.images.length, Math.round(strip.scrollLeft / strip.clientWidth) + 1)} / ${r.images.length}`;
+      };
+    }
+    app.querySelectorAll('[data-img]').forEach((b) => {
+      b.onclick = () => strip.scrollBy({ left: Number(b.dataset.img) * strip.clientWidth, behavior: 'smooth' });
+    });
+  };
+  bindGallery();
+
+  // Zeigt ein Video oder die Bilder. Läuft das Video schon, springt der Player selbst;
+  // sonst wird es neu geladen und springt, sobald es bereit ist.
+  const showMedia = (key, seconds = null) => {
+    const box = $('#media-box');
+    const next = tabs.find((t) => t.key === key);
     if (!box || !next) return;
     box.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    if (next.key === shown.key && seconds != null) {
-      seekTo($('#video'), shown, seconds);
+    if (next.key === shown.key) {
+      if (next.video && seconds != null) seekTo($('#video'), next.video, seconds);
       return;
     }
-    if (next.key !== shown.key) {
-      shown = next;
-      box.classList.toggle('vertical', Boolean(next.vertical));
-      box.innerHTML = `<iframe id="video" src="${esc(embedUrl(next, location.origin, seconds))}" title="Video zum Rezept"
-        allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`;
-      // TikTok kennt keine Startzeit in der Adresse, springt also erst nach dem Laden.
-      if (seconds != null && next.provider !== 'youtube') {
-        const frame = $('#video');
-        frame.addEventListener('load', () => seekTo(frame, next, seconds), { once: true });
-      }
-      app.querySelectorAll('#video-tabs [data-video]').forEach((t) => {
-        const on = t.dataset.video === next.key;
-        t.classList.toggle('active', on);
-        t.setAttribute('aria-selected', String(on));
-      });
+    shown = next;
+    box.innerHTML = mediaHtml(next, seconds);
+    // TikTok kennt keine Startzeit in der Adresse, springt also erst nach dem Laden.
+    if (next.video && seconds != null && next.video.provider !== 'youtube') {
+      const frame = $('#video');
+      frame.addEventListener('load', () => seekTo(frame, next.video, seconds), { once: true });
     }
+    if (!next.video) bindGallery();
+    app.querySelectorAll('#media-tabs [data-media]').forEach((t) => {
+      const on = t.dataset.media === next.key;
+      t.classList.toggle('active', on);
+      t.setAttribute('aria-selected', String(on));
+    });
   };
 
-  app.querySelectorAll('#video-tabs [data-video]').forEach((t) => {
-    t.onclick = () => playVideo(t.dataset.video);
+  app.querySelectorAll('#media-tabs [data-media]').forEach((t) => {
+    t.onclick = () => showMedia(t.dataset.media);
   });
 
   // Zeitstempel bei den Schritten: zum passenden Video und dort an die Stelle springen.
   app.querySelectorAll('.seek').forEach((b) => {
-    b.onclick = () => playVideo(b.dataset.video, Number(b.dataset.t));
+    b.onclick = () => showMedia(b.dataset.video, Number(b.dataset.t));
   });
 
   if (!own) {

@@ -197,15 +197,19 @@ ul.hint { margin: 8px 0 0; padding-left: 1.2rem; }
 .recipe section { margin-top: 24px; }
 .gallery {
   display: flex; gap: 8px; overflow-x: auto; scroll-snap-type: x mandatory;
-  margin: 0 -16px 8px; padding: 0 16px;
+  margin: 0 -16px; padding: 0 16px; scrollbar-width: none;
 }
+.gallery::-webkit-scrollbar { display: none; }
 .gallery img {
   flex: none; width: min(100%, 560px); aspect-ratio: 4 / 3; object-fit: cover;
   border-radius: var(--radius); scroll-snap-align: start;
 }
 .gallery img:only-child { width: 100%; }
-.video-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
-.video { margin: 0 0 12px; scroll-margin-top: 72px; }
+/* Medien oben im Rezept: eine Leiste, darunter das Video oder die Bilder */
+.media-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.media { margin-bottom: 12px; scroll-margin-top: 72px; }
+.gallery-nav { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 6px; color: var(--muted); font-size: 0.875rem; }
+.video { margin: 0; scroll-margin-top: 72px; }
 .video iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: var(--radius); background: #000; }
 .video.vertical iframe { aspect-ratio: 9 / 16; width: auto; max-width: 100%; height: min(70vh, 640px); margin: 0 auto; }
 .lead { color: var(--muted); font-size: 1.05rem; margin: 0 0 12px; }
