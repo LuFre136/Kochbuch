@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  parseIngredientLine, parseNumber, formatAmount, formatQuantity, ingredientToLine,
+  parseIngredientLine, parseNumber, formatAmount, formatQuantity, ingredientToLine, splitNote, ingredientParts,
 } from '../js/ingredients.js';
 
 test('parseNumber versteht Dezimalkomma, Brüche und Unicode-Brüche', () => {
@@ -48,4 +48,25 @@ test('ingredientToLine ergibt beim erneuten Parsen dieselbe Zutat', () => {
     const ing = parseIngredientLine(line);
     assert.deepEqual(parseIngredientLine(ingredientToLine(ing)), ing, line);
   }
+});
+
+test('Anmerkungen in Klammern werden abgetrennt, Plural-Klammern fallen weg', () => {
+  assert.deepEqual(parseIngredientLine('200 g Mehl (Type 405)'), { amount: 200, amountMax: null, unit: 'g', name: 'Mehl', note: 'Type 405' });
+  assert.deepEqual(parseIngredientLine('3 Ei(er)'), { amount: 3, amountMax: null, unit: '', name: 'Ei' });
+  assert.deepEqual(parseIngredientLine('2 Zwiebel(n), gewürfelt'), { amount: 2, amountMax: null, unit: '', name: 'Zwiebel, gewürfelt' });
+  assert.deepEqual(parseIngredientLine('2 Tomate(n) (sehr reif)'), { amount: 2, amountMax: null, unit: '', name: 'Tomate', note: 'sehr reif' });
+  assert.deepEqual(parseIngredientLine('1 Dose Tomaten (400 g)'), { amount: 1, amountMax: null, unit: 'Dose', name: 'Tomaten', note: '400 g' });
+  assert.deepEqual(parseIngredientLine('Salz (nach Belieben)'), { amount: null, amountMax: null, unit: '', name: 'Salz', note: 'nach Belieben' });
+  assert.equal(parseIngredientLine('()'), null);
+  assert.equal(ingredientToLine(parseIngredientLine('200 g Mehl (Type 405)')), '200 g Mehl (Type 405)');
+});
+
+test('ältere Rezepte mit Klammern im Namen', () => {
+  assert.deepEqual(ingredientParts({ name: 'Paprikaschote(n) (rot)' }), { name: 'Paprikaschote', note: 'rot' });
+  assert.deepEqual(ingredientParts({ name: 'Mehl', note: 'Type 405' }), { name: 'Mehl', note: 'Type 405' });
+  assert.deepEqual(splitNote('Mehl'), { name: 'Mehl', note: '' });
+});
+
+test('beim Bearbeiten älterer Rezepte steht die Anmerkung wieder in Klammern', () => {
+  assert.equal(ingredientToLine({ amount: 2, amountMax: null, unit: '', name: 'Ei(er) (Größe M)' }), '2 Ei (Größe M)');
 });
