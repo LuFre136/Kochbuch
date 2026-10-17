@@ -9,6 +9,7 @@ import {
 import { PRODUCE, MONTHS, seasonOf, inSeason, seasonalRecipes } from './season.js';
 import { CATEGORIES, guessCategory, categoryKey, categoryRank } from './categories.js';
 import { DEFAULT_PLACES, guessPlaces } from './places.js';
+import { linkify } from './links.js';
 import {
   videoOf, embedUrl, seekTo, stepText, stepTime, makeStep, formatTime,
 } from './video.js';
@@ -940,7 +941,7 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
       ${hasNutrition(r.nutrition) ? `<section><h2>Nährwerte <small class="hint">${r.nutrition.per === '100 g' ? 'pro 100 g' : 'pro Portion'}</small></h2>
         <dl class="nutrition">${NUTRIENTS.filter(([k]) => r.nutrition[k] != null).map(([k, label, unit]) => `<div><dt>${label}</dt><dd>${formatNutrient(r.nutrition[k])} ${unit}</dd></div>`).join('')}</dl></section>` : ''}
 
-      ${r.notes ? `<section><h2>Notizen</h2><p class="notes">${esc(r.notes)}</p></section>` : ''}
+      ${r.notes ? `<section><h2>Notizen</h2><p class="notes">${linkify(r.notes)}</p></section>` : ''}
 
       ${sources.length ? `<section><h2>Quellen</h2><ul class="sources">
         ${sources.map(([u, href]) => `<li><a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(hostOf(u))}</a></li>`).join('')}
