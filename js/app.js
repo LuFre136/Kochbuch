@@ -11,7 +11,7 @@ import { CATEGORIES, guessCategory, categoryKey, categoryRank } from './categori
 import { DEFAULT_PLACES, guessPlaces } from './places.js';
 import { linkify } from './links.js';
 import {
-  videoOf, videosOf, videoKey, embedUrl, seekTo, askPlayerState, pausePlayer, isPlayerMessage, stepText, stepTime, stepVideo,
+  videoOf, videosOf, videoKey, embedUrl, seekTo, askPlayerState, pausePlayer, playMuted, playerState, isPlayerMessage, stepText, stepTime, stepVideo,
   dropMissingTimes, makeStep, formatTime,
 } from './video.js';
 import {
@@ -876,7 +876,13 @@ function enableRecipeSwipe(el, go) {
 window.addEventListener('message', (e) => {
   if (!isPlayerMessage(e.data)) return;
   for (const frame of document.querySelectorAll('#media-box iframe[data-video]')) {
-    if (e.source === frame.contentWindow) { frame.dataset.ready = '1'; return; }
+    if (e.source !== frame.contentWindow) continue;
+    frame.dataset.ready = '1';
+    // Ob gerade abgespielt wird, entscheidet darüber, ob ein zweiter, stummer Versuch nötig ist.
+    const state = playerState(e.data);
+    if (state === 'playing') frame.dataset.playing = '1';
+    else if (state) delete frame.dataset.playing;
+    return;
   }
 });
 
@@ -974,7 +980,7 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
   // und beim Wechseln geht die Stelle im anderen Video nicht verloren.
   const mediaHtml = () => tabs.map((t, i) => `<div class="media-panel" data-panel="${esc(t.key)}"${i ? ' hidden' : ''}>
     ${t.video ? videoHtml(t.video) : galleryHtml()}</div>`).join('');
-  // Videos und Bilder stehen bei der Zubereitung: dort, wo man beim Kochen hinschaut.
+  // Videos und Bilder stehen nach den Zutaten, über der Überschrift Zubereitung.
   const mediaBlock = shown ? `${tabs.length > 1 ? `<div class="media-tabs" id="media-tabs" role="tablist">${tabs.map((t, i) => `<button type="button" class="chip${i === 0 ? ' active' : ''}"
       data-media="${esc(t.key)}" role="tab" aria-selected="${i === 0}">${esc(t.label)}</button>`).join('')}</div>` : ''}
     <div class="media" id="media-box">${mediaHtml()}</div>` : '';
@@ -1021,8 +1027,9 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
         <ul class="ingredients" id="ing"></ul>
       </section>` : ''}
 
+      ${mediaBlock}
+
       ${r.steps.length ? `<section><h2>Zubereitung</h2>
-        ${mediaBlock}
         <ol class="steps">${r.steps.map((s) => {
     const v = stepVideo(s, videos);
     const t = v ? stepTime(s) : null;
@@ -1030,7 +1037,7 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
     const n = videos.length > 1 ? `${videos.indexOf(v) + 1} · ` : '';
     return `<li>${t != null ? `<button type="button" class="seek" data-t="${t}" data-video="${esc(v.key)}"
       aria-label="Video ${videos.length > 1 ? `${videos.indexOf(v) + 1} ` : ''}ab ${formatTime(t)} abspielen">▶ ${n}${formatTime(t)}</button> ` : ''}${esc(stepText(s))}</li>`;
-  }).join('')}</ol></section>` : mediaBlock}
+  }).join('')}</ol></section>` : ''}
 
       ${hasNutrition(r.nutrition) ? `<section><h2>Nährwerte <small class="hint">${r.nutrition.per === '100 g' ? 'pro 100 g' : 'pro Portion'}</small></h2>
         <dl class="nutrition">${NUTRIENTS.filter(([k]) => r.nutrition[k] != null).map(([k, label, unit]) => `<div><dt>${label}</dt><dd>${formatNutrient(r.nutrition[k])} ${unit}</dd></div>`).join('')}</dl></section>` : ''}
@@ -1151,6 +1158,19 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
     frame.src = embedUrl(entry.video, location.origin, seconds);
   };
 
+  // Springt an die Stelle und startet. Läuft die Wiedergabe kurz darauf immer noch nicht,
+  // folgt ein stummer Versuch mit Ton gleich danach: mit Ton verweigern Browser den Start
+  // ohne Geste im Video selbst, bei TikTok durchweg.
+  const playAt = (entry, seconds) => {
+    const frame = frameOf(entry.key);
+    if (!frame) return;
+    seekTo(frame, entry.video, seconds);
+    clearTimeout(Number(frame.dataset.retry));
+    frame.dataset.retry = String(setTimeout(() => {
+      if (frame.isConnected && !frame.dataset.playing) playMuted(frame, entry.video, seconds);
+    }, 900));
+  };
+
   // Zeigt ein Video oder die Bilder. Der sichtbare Player trägt die Kennung #video, damit
   // es weiterhin genau einen gibt, der gemeint ist.
   const showMedia = (key, seconds = null) => {
@@ -1159,7 +1179,11 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
     if (!box || !next) return;
     box.scrollIntoView({ behavior: 'smooth', block: 'start' });
     if (next.key !== shown.key) {
-      if (shown.video) pausePlayer(frameOf(shown.key), shown.video);
+      if (shown.video) {
+        const alt = frameOf(shown.key);
+        clearTimeout(Number(alt?.dataset.retry));
+        pausePlayer(alt, shown.video);
+      }
       app.querySelectorAll('#media-box [data-panel]').forEach((p) => { p.hidden = p.dataset.panel !== next.key; });
       frames().forEach((f) => { if (f.dataset.video === next.key) f.id = 'video'; else f.removeAttribute('id'); });
       shown = next;
@@ -1171,7 +1195,7 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
     }
     if (!next.video || seconds == null) return;
     const frame = frameOf(next.key);
-    if (frame?.dataset.ready) seekTo(frame, next.video, seconds);
+    if (frame?.dataset.ready) playAt(next, seconds);
     else reloadAt(next, seconds);
   };
 
