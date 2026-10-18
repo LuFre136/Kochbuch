@@ -54,7 +54,8 @@ h2 { font-size: 1.15rem; margin: 0; }
   border-bottom: 1px solid var(--border);
 }
 .brand { font-weight: 700; font-size: 1.1rem; color: var(--text); text-decoration: none; white-space: nowrap; }
-#nav { display: flex; gap: 8px; }
+/* Feste Hoehe, damit die Kopfzeile nicht springt, wenn eine Seite keine Knoepfe hat. */
+#nav { display: flex; align-items: center; gap: 8px; min-height: 40px; }
 
 main { max-width: 860px; margin: 0 auto; padding: 16px; }
 
