@@ -19,6 +19,8 @@ import {
   filterByTags, tagMatches,
 } from './alternatives.js';
 import { SORTS, sortRecipes, formatCooked, cookedFromPlan } from './sorting.js';
+import { HELP, helpFor, helpTopic } from './help.js';
+import { NEWS, newsSince, latestVersion } from './news.js';
 import {
   ingredientsFromStep, remainingIngredients, ingredientKey, mentionsIngredient,
   scaleIngredient, combinedTitle, stepsForCombine, combinedImages,
@@ -276,6 +278,8 @@ async function render() {
     if (myName === undefined) myName = await loadMyName();
     if (myName === null) { renderUsername(); return; }
     if (!first) await renderList();
+    else if (first === 'verwalten') renderManage();
+    else if (first === 'hilfe') renderHelp(id);
     else if (first === 'geteilt') await renderSharing();
     else if (first === 'plan') await renderPlan();
     else if (first === 'einkauf') await renderShopping(id);
@@ -310,12 +314,17 @@ function renderNav() {
     $('#login', nav).onclick = () => renderLogin();
     return;
   }
+  const [first, , action] = route();
+  const topic = helpFor(first, action);
   nav.innerHTML = `
     <a class="btn primary small" href="#/neu">+ Rezept</a>
+    ${topic ? '<button class="icon-btn" id="help-btn" aria-label="Hilfe zu dieser Seite" title="Hilfe zu dieser Seite">?</button>' : ''}
     <button class="btn ghost small" id="logout" title="${esc(session.user.email)}">Abmelden</button>`;
   $('#logout', nav).onclick = async () => {
     await supabase.auth.signOut();
   };
+  const help = $('#help-btn', nav);
+  if (help) help.onclick = () => openHelpSheet(topic);
 }
 
 // ---------- Benutzername ----------
@@ -461,6 +470,7 @@ const ICONS = {
   pantry: '<circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/>',
   plan: '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>',
   shop: '<path d="M3 4h2l2.4 11h10.2L20 8H6.2"/><circle cx="9" cy="19.5" r="1.3"/><circle cx="17" cy="19.5" r="1.3"/>',
+  manage: '<circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8"/>',
   shared: '<circle cx="8" cy="9" r="3"/><circle cx="17" cy="10" r="2.5"/><path d="M3 19c.8-3 2.8-4.5 5-4.5s4.2 1.5 5 4.5M14 18.5c.5-2 1.7-3 3.2-3s2.7 1 3.3 3"/>',
 };
 
@@ -469,12 +479,12 @@ const TABS = [
   ['pantry', '#/kochen', 'Was kochen?'],
   ['plan', '#/plan', 'Plan'],
   ['shop', '#/einkauf', 'Einkauf'],
-  ['shared', '#/geteilt', 'Geteilt'],
+  ['manage', '#/verwalten', 'Verwalten'],
 ];
 
 function renderTabbar(first) {
   if (!session) { tabbar.hidden = true; return; }
-  const active = { '': 'list', r: 'list', neu: 'list', kombinieren: 'list', kochen: 'pantry', saison: 'pantry', plan: 'plan', einkauf: 'shop', geteilt: 'shared', kochbuch: 'shared', liste: 'shop' }[first || ''];
+  const active = { '': 'list', r: 'list', neu: 'list', kombinieren: 'list', kochen: 'pantry', saison: 'pantry', plan: 'plan', einkauf: 'shop', verwalten: 'manage', geteilt: 'manage', kochbuch: 'manage', hilfe: 'manage', liste: 'shop' }[first || ''];
   tabbar.hidden = false;
   tabbar.innerHTML = TABS.map(([key, href, label]) => `<a href="${href}" class="${key === active ? 'active' : ''}"${key === active ? ' aria-current="page"' : ''}>
     <svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[key]}</svg><span>${label}</span></a>`).join('');
@@ -2956,6 +2966,77 @@ async function loadPeople() {
   };
 }
 
+// ---------- Verwalten und Hilfe ----------
+
+// Sammelseite hinter dem letzten Reiter: von hier geht es zum Teilen und zur Hilfe.
+function renderManage() {
+  app.innerHTML = `
+    <h1>Verwalten</h1>
+    <nav class="manage-list">
+      <a class="manage-item card-panel" href="#/geteilt">
+        <strong>Teilen</strong>
+        <small>Kochbuch freigeben, einzeln geteilte Rezepte, Kochbücher anderer und dein Benutzername</small>
+      </a>
+      <a class="manage-item card-panel" href="#/hilfe">
+        <strong>Hilfe</strong>
+        <small>Kurze Anleitungen zu allen Bereichen der App</small>
+      </a>
+      <button type="button" class="manage-item card-panel" id="news-again">
+        <strong>Was ist neu</strong>
+        <small>Die Änderungen der letzten Fassungen noch einmal ansehen</small>
+      </button>
+    </nav>`;
+  $('#news-again').onclick = () => openNewsSheet(NEWS.slice(0, 2));
+}
+
+const helpLines = (topic) => `<ul class="help-lines">${topic.lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>`;
+
+function renderHelp(id) {
+  const open = helpTopic(id);
+  app.innerHTML = `
+    <a class="back" href="#/verwalten">← Verwalten</a>
+    <h1>Hilfe</h1>
+    <p class="hint">Tippe ein Thema an. Auf jeder Seite der App führt das Fragezeichen oben rechts direkt zum passenden Thema.</p>
+    ${HELP.map((t) => `<details class="help-topic card-panel" id="hilfe-${t.id}"${t === open ? ' open' : ''}>
+      <summary>${esc(t.title)}</summary>
+      ${helpLines(t)}</details>`).join('')}`;
+  if (open) $(`#hilfe-${open.id}`).scrollIntoView({ block: 'start' });
+}
+
+// Der Hilfe-Knopf oben rechts: zeigt den Abschnitt zur aktuellen Seite.
+async function openHelpSheet(topic) {
+  const { value } = await openSheet(`<h2>${esc(topic.title)}</h2>
+    ${helpLines(topic)}
+    <div class="row"><button class="btn primary" value="ok">Verstanden</button>
+      <button class="btn ghost" value="alle" formnovalidate>Ganze Hilfe</button></div>`);
+  if (value === 'alle') location.hash = `#/hilfe/${topic.id}`;
+}
+
+const NEWS_KEY = 'kochbuch.news';
+
+// Beim ersten Start nach einem Update: zeigt, was dazugekommen ist. Die gesehene Fassung
+// liegt im Browser, also pro Gerät — am Handy kommt das Blatt noch einmal.
+function showNewsIfUpdated() {
+  let seen = null;
+  try { seen = localStorage.getItem(NEWS_KEY); } catch { return; }
+  const neu = newsSince(seen);
+  try { localStorage.setItem(NEWS_KEY, latestVersion()); } catch { /* privater Modus */ }
+  if (neu.length) openNewsSheet(neu);
+}
+
+async function openNewsSheet(entries) {
+  // Jede Zeile kann einen Knopf haben, der das Blatt schließt und zur passenden Stelle führt;
+  // der Wert des Knopfs ist die Adresse.
+  const { value } = await openSheet(`<h2>Was ist neu</h2>
+    ${entries.map((e) => `<section class="news-entry">
+      <h3>${esc(e.title)}</h3>
+      <ul class="help-lines">${e.lines.map((l) => `<li>${esc(l.text)}
+        ${l.ziel ? `<button class="btn small ghost" value="${esc(l.ziel)}" formnovalidate>Ansehen</button>` : ''}</li>`).join('')}</ul>
+    </section>`).join('')}
+    <div class="row"><button class="btn primary" value="ok">Alles klar</button></div>`);
+  if (value.startsWith('#/')) location.hash = value;
+}
+
 async function renderSharing() {
   app.innerHTML = `<p class="loading">Lade …</p>`;
   const [own, people, invite] = await Promise.all([
@@ -2969,6 +3050,8 @@ async function renderSharing() {
   const { readers, owners } = people;
 
   app.innerHTML = `
+    <a class="back" href="#/verwalten">← Verwalten</a>
+    <h1>Teilen</h1>
     ${myName ? `<section class="card-panel share-section">
       <h2>Dein Benutzername</h2>
       <div class="row"><strong>${esc(myName)}</strong><button class="btn small" id="rename-me">Ändern</button></div>
@@ -3381,6 +3464,8 @@ if (isConfigured) {
   session = data.session;
 }
 render();
+
+if (isConfigured && session) showNewsIfUpdated();
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
