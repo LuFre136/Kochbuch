@@ -1861,6 +1861,11 @@ async function renderEditor(id) {
           <option value="100 g"${r.nutrition?.per === '100 g' ? ' selected' : ''}>pro 100 g</option></select></label>
         <div class="nutrition-grid">${NUTRIENTS.map(([k, label, unit]) => `<label>${label} (${unit})
           <input name="n_${k}" type="number" min="0" step="any" inputmode="decimal" value="${r.nutrition?.[k] ?? ''}"></label>`).join('')}</div>
+        <div class="nutrition-calc">
+          <button type="button" class="btn small" id="nutrition-btn">Nährwerte ermitteln</button>
+          <small>Schätzt die Werte pro Portion aus den Zutaten unten und überschreibt die Felder.</small>
+        </div>
+        <p class="hint" id="nutrition-msg" role="status"></p>
       </details>
 
       <label>Zutaten <textarea name="ingredients" rows="8" placeholder="200 g Mehl&#10;2 Eier&#10;1 Prise Salz">${esc(r.ingredients.map(ingredientToLine).join('\n'))}</textarea>
@@ -2105,6 +2110,7 @@ async function renderEditor(id) {
     };
   }
 
+  setupNutritionCalc(form, setNutrition);
   if (!existing && !combined) setupImport(form, { setTags, setSteps, addImage: (file) => { newFiles.push({ file, preview: URL.createObjectURL(file) }); drawThumbs(); }, drawPreview, setNutrition });
 
   form.onsubmit = async (e) => {
@@ -3167,6 +3173,50 @@ function importMessage(data) {
   return 'Im Video wurde kein Rezept gefunden. Titel, Bild und Link sind übernommen, den Rest bitte selbst ergänzen.';
 }
 
+// Fehlermeldung der Edge Function: der Text steht im Body, nicht in error.message.
+async function invokeDetail(error) {
+  let detail = error.message;
+  const status = error.context?.status;
+  try { detail = (await error.context.json()).error || detail; } catch { /* keine JSON-Antwort */ }
+  if (status === 404) return 'Die Import-Funktion ist in Supabase noch nicht eingerichtet (siehe README).';
+  return detail;
+}
+
+function nutritionMessage(data) {
+  const missing = data?.missing ?? [];
+  const ohne = missing.length ? ` Für diese Zutaten gab es keine Nährwerte, sie fehlen in der Summe: ${missing.join(', ')}.` : '';
+  if (!data?.nutrition) return `Für keine Zutat wurden Nährwerte gefunden.${ohne} Bitte die Werte selbst eintragen.`;
+  return `Aus ${data.counted} von ${data.ingredients} Zutaten geschätzt, pro Portion. Prüfe die Werte.${ohne}`;
+}
+
+// Nährwerte aus den Zutaten: die Edge Function fragt Gemini nach den Werten jeder Zutat und
+// summiert sie. Steht auch beim Bearbeiten eines bestehenden Rezepts zur Verfügung.
+function setupNutritionCalc(form, setNutrition) {
+  const btn = $('#nutrition-btn');
+  const msg = $('#nutrition-msg');
+  if (!btn) return;
+  btn.onclick = async () => {
+    const ingredients = form.ingredients.value.split('\n').map((x) => x.trim()).filter(Boolean);
+    if (!ingredients.length) { msg.textContent = 'Trage zuerst die Zutaten ein.'; return; }
+    btn.disabled = true;
+    btn.textContent = 'Ermittle …';
+    msg.textContent = 'Die Zutaten werden ausgewertet, das dauert einen Moment.';
+    try {
+      const body = { nutrition: { ingredients, servings: Math.max(1, Number(form.servings.value) || 1) } };
+      const { data, error } = await supabase.functions.invoke('import-recipe', { body });
+      if (error) throw new Error(await invokeDetail(error));
+      if (data?.error) throw new Error(data.error);
+      if (data?.nutrition) setNutrition(data.nutrition);
+      msg.textContent = nutritionMessage(data);
+    } catch (err) {
+      msg.textContent = `Das hat nicht geklappt: ${err.message}`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Nährwerte ermitteln';
+    }
+  };
+}
+
 // Import per Link: die Edge Function "import-recipe" lädt die Seite und liest das Rezept aus.
 // Bei Videos (YouTube, TikTok) wertet sie das Video mit Gemini aus.
 function setupImport(form, { setTags, setSteps, addImage, drawPreview, setNutrition }) {
@@ -3190,13 +3240,7 @@ function setupImport(form, { setTags, setSteps, addImage, drawPreview, setNutrit
 
   const invoke = async (body) => {
     const { data, error } = await supabase.functions.invoke('import-recipe', { body });
-    if (error) {
-      let detail = error.message;
-      const status = error.context?.status;
-      try { detail = (await error.context.json()).error || detail; } catch { /* keine JSON-Antwort */ }
-      if (status === 404) detail = 'Die Import-Funktion ist in Supabase noch nicht eingerichtet (siehe README).';
-      throw new Error(detail);
-    }
+    if (error) throw new Error(await invokeDetail(error));
     return data;
   };
 

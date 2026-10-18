@@ -244,3 +244,39 @@ test('die Anweisung für Untertitel verlangt Zeitstempel aus den Zeilen', () => 
   assert.match(prompt, /Untertitel eines Kochvideos/);
   assert.match(prompt, /- start: die Zeit vom Anfang der Untertitel-Zeile/);
 });
+
+test('Nährwerte aus den Zutaten: summiert und auf eine Portion gerechnet', () => {
+  const ai = {
+    ingredients: [
+      { name: '200 g Mehl', found: true, kcal: 684, protein: 20, fat: 2, carbs: 144 },
+      { name: '2 Eier', found: true, kcal: 155, protein: 13.6, fat: 10.8, carbs: 0.8 },
+      { name: 'Salz', found: false, kcal: null },
+      { name: 'Öl zum Braten', found: true, kcal: null },      // ohne kcal nicht verwertbar
+    ],
+  };
+  const { nutrition, missing, counted } = fn.sumNutrition(ai, 2);
+  assert.equal(counted, 2);
+  assert.deepEqual(missing, ['Salz', 'Öl zum Braten']);
+  assert.equal(nutrition.per, 'Portion');
+  assert.equal(nutrition.kcal, 420);                            // (684 + 155) / 2, gerundet
+  assert.equal(nutrition.protein, 16.8);
+  assert.equal(nutrition.carbs, 72.4);
+  assert.equal(nutrition.sugar, undefined);                     // nichts erfunden
+});
+
+test('Nährwerte: ohne verwertbare Zutat bleibt es bei null', () => {
+  const { nutrition, missing } = fn.sumNutrition({ ingredients: [{ name: 'Salz', found: false }] }, 4);
+  assert.equal(nutrition, null);
+  assert.deepEqual(missing, ['Salz']);
+  assert.deepEqual(fn.sumNutrition(null, 1), { nutrition: null, missing: [], counted: 0 });
+  // Unsinnige Portionszahlen fallen auf eine Portion zurück.
+  assert.equal(fn.sumNutrition({ ingredients: [{ name: 'x', found: true, kcal: 100 }] }, 0).nutrition.kcal, 100);
+});
+
+test('die Anweisung für Nährwerte verlangt die Menge der Zeile und keine Schätzungen ohne Menge', () => {
+  const prompt = fn.nutritionPrompt(['200 g Mehl', 'Salz']);
+  assert.match(prompt, /nicht pro 100 g/);
+  assert.match(prompt, /found = false/);
+  assert.match(prompt, /1\. 200 g Mehl/);
+  assert.match(prompt, /2\. Salz/);
+});

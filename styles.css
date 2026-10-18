@@ -557,6 +557,8 @@ dialog.sheet.full {
 .nutrition-per { margin-bottom: 10px; }
 .nutrition-per select { display: block; width: 100%; min-height: 44px; margin-top: 4px; padding: 0 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
 .nutrition-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); gap: 10px; }
+.nutrition-calc { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 12px; }
+.nutrition-calc small { flex: 1 1 12rem; color: var(--muted); }
 .nutrition { display: grid; grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr)); gap: 10px 16px; margin: 0; }
 .nutrition dt { color: var(--muted); font-size: 0.85rem; }
 .nutrition dd { margin: 0; font-weight: 600; }

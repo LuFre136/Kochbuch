@@ -30,6 +30,10 @@
 //
 // Nährwerte kommen, wenn vorhanden, als nutrition: { kcal, protein, fat, carbs, sugar, fiber, salt, per }
 // (Gramm bzw. kcal; per = 'Portion' oder '100 g').
+//
+// Nährwerte aus den Zutaten schätzen:
+// supabase.functions.invoke('import-recipe', { body: { nutrition: { ingredients: ['200 g Mehl', …], servings } } })
+// Antwort: { nutrition: { … per: 'Portion' } | null, missing: string[], counted, ingredients }.
 
 const MAX_PAGE_BYTES = 5_000_000;
 const MAX_IMAGE_BYTES = 8_000_000;
@@ -596,7 +600,7 @@ export function aiPrompt(meta: VideoMeta | null, source: AiSource): string {
 const RETRY_STATUS = new Set([404, 429, 500, 503]);
 
 // deno-lint-ignore no-explicit-any
-async function askGemini(key: string, parts: any[], lowResolution = true, timeoutMs = 110_000): Promise<Record<string, unknown>> {
+async function askGemini(key: string, parts: any[], lowResolution = true, timeoutMs = 110_000, schema: unknown = AI_SCHEMA): Promise<Record<string, unknown>> {
   const models = [...new Set([env('GEMINI_MODEL'), 'gemini-flash-latest', 'gemini-2.5-flash'].filter(Boolean))] as string[];
   let lastError = '';
   for (const model of models) {
@@ -608,7 +612,7 @@ async function askGemini(key: string, parts: any[], lowResolution = true, timeou
         generationConfig: {
           temperature: 0.2,
           responseMimeType: 'application/json',
-          responseSchema: AI_SCHEMA,
+          responseSchema: schema,
           // Videos in niedriger Auflösung (spart Kontingent); Fotos voll, damit auch Handschrift lesbar ist.
           ...(lowResolution ? { mediaResolution: 'MEDIA_RESOLUTION_LOW' } : {}),
         },
@@ -666,6 +670,104 @@ function aiNutrition(raw: unknown): Nutrition | null {
     if (n[key] != null && Number.isFinite(v) && v >= 0 && v < 100000) out[key] = key === 'kcal' ? Math.round(v) : Math.round(v * 10) / 10;
   }
   return Object.keys(out).length > 1 ? out : null;
+}
+
+// Nährwerte aus den Zutaten ermitteln (Knopf im Bearbeiten-Formular): Gemini schätzt für jede
+// Zutatenzeile die Werte der genannten Menge, hier werden sie summiert und auf eine Portion
+// heruntergerechnet. Zeilen ohne Menge ("Salz", "Öl zum Braten") oder unbekannte Lebensmittel
+// kommen als missing zurück, damit die App darauf hinweisen kann.
+export const NUTRITION_KEYS = ['kcal', 'protein', 'fat', 'carbs', 'sugar', 'fiber', 'salt'] as const;
+
+export const NUTRITION_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    ingredients: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          name: { type: 'STRING' },
+          found: { type: 'BOOLEAN' },
+          kcal: { type: 'NUMBER', nullable: true }, protein: { type: 'NUMBER', nullable: true },
+          fat: { type: 'NUMBER', nullable: true }, carbs: { type: 'NUMBER', nullable: true },
+          sugar: { type: 'NUMBER', nullable: true }, fiber: { type: 'NUMBER', nullable: true },
+          salt: { type: 'NUMBER', nullable: true },
+        },
+        required: ['name', 'found'],
+      },
+    },
+  },
+  required: ['ingredients'],
+};
+
+export function nutritionPrompt(ingredients: string[]): string {
+  return [
+    'Du bekommst die Zutatenliste eines Rezepts. Gib für jede Zeile die Nährwerte der dort genannten Menge an, nicht pro 100 g.',
+    'Regeln:',
+    '- Eine Antwort pro Zeile, in derselben Reihenfolge; name genau wie in der Liste.',
+    '- kcal in Kilokalorien, alles andere in Gramm; salt als Kochsalz.',
+    '- Haushaltsmaße umrechnen (1 EL Öl ≈ 14 g, 1 TL ≈ 5 g, 1 Ei ≈ 55 g, 1 Knoblauchzehe ≈ 3 g, 1 Zwiebel ≈ 110 g, 1 Tasse Mehl ≈ 120 g).',
+    '- Nimm die übliche Zusammensetzung des Lebensmittels aus einer Nährwerttabelle; eine gute Schätzung reicht.',
+    '- found = false und alle Werte null, wenn die Menge fehlt oder offen ist ("Salz", "etwas Öl zum Braten", "Deko") oder das Lebensmittel unbekannt ist. Nicht raten.',
+    '- Zutaten, die nicht mitgegessen werden (Öl zum Einfetten, Wasser zum Kochen), ebenfalls found = false.',
+    '',
+    'Zutaten:',
+    ...ingredients.map((x, i) => `${i + 1}. ${x}`),
+  ].join('\n');
+}
+
+export function sumNutrition(raw: unknown, servings: number): { nutrition: Nutrition | null; missing: string[]; counted: number } {
+  const list = (raw ?? {}) as Record<string, unknown>;
+  const items = Array.isArray(list.ingredients) ? list.ingredients : [];
+  const total: Record<string, number> = {};
+  const missing: string[] = [];
+  let counted = 0;
+  for (const entry of items) {
+    const item = (entry ?? {}) as Record<string, unknown>;
+    const name = cleanText(item.name);
+    const values: Record<string, number> = {};
+    for (const key of NUTRITION_KEYS) {
+      const v = Number(item[key]);
+      if (item[key] != null && Number.isFinite(v) && v >= 0 && v < 100_000) values[key] = v;
+    }
+    // Ohne kcal ist die Zutat nicht verwertbar, auch wenn die KI found = true meldet.
+    if (item.found !== true || values.kcal == null) {
+      if (name) missing.push(name);
+      continue;
+    }
+    counted += 1;
+    for (const [key, v] of Object.entries(values)) total[key] = (total[key] ?? 0) + v;
+  }
+  if (!counted) return { nutrition: null, missing, counted };
+  const portions = Math.max(1, Math.round(servings) || 1);
+  const nutrition: Nutrition = { per: 'Portion' };
+  for (const key of NUTRITION_KEYS) {
+    if (total[key] == null) continue;
+    const v = total[key] / portions;
+    nutrition[key] = key === 'kcal' ? Math.round(v) : Math.round(v * 10) / 10;
+  }
+  return { nutrition, missing, counted };
+}
+
+export const MAX_NUTRITION_INGREDIENTS = 60;
+
+async function estimateNutrition(body: unknown) {
+  const req = (body ?? {}) as Record<string, unknown>;
+  const list = (Array.isArray(req.ingredients) ? req.ingredients : []).map((x) => cleanText(x)).filter(Boolean);
+  if (!list.length) return json({ error: 'Für die Nährwerte fehlen die Zutaten.' }, 400);
+  if (list.length > MAX_NUTRITION_INGREDIENTS) {
+    return json({ error: `Nährwerte gehen bis ${MAX_NUTRITION_INGREDIENTS} Zutaten.` }, 400);
+  }
+  const key = env('GEMINI_API_KEY');
+  if (!key) return json({ error: 'Für die Nährwerte fehlt in Supabase das Secret GEMINI_API_KEY (siehe README).' }, 400);
+  const servings = Number(req.servings);
+  try {
+    const ai = await askGemini(key, [{ text: nutritionPrompt(list) }], true, 60_000, NUTRITION_SCHEMA);
+    const { nutrition, missing, counted } = sumNutrition(ai, Number.isFinite(servings) ? servings : 1);
+    return json({ nutrition, missing, counted, ingredients: list.length });
+  } catch (err) {
+    return json({ error: `Die Nährwerte konnten nicht ermittelt werden: ${(err as Error).message}` }, 502);
+  }
 }
 
 async function importVideo(video: VideoRef, url: string) {
@@ -1014,6 +1116,7 @@ async function handle(req: Request): Promise<Response> {
   let url: string;
   try {
     const body = await req.json();
+    if (body.nutrition) return await estimateNutrition(body.nutrition);
     if (body.images) return await importPhotos(body.images);
     if (body.video) return await importUploadedVideo(req, body.video);
     if (body.text != null) return await importText(body.text);
