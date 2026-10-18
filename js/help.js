@@ -111,6 +111,7 @@ export const HELP = [
       'Ein einzelnes Rezept teilst du im Rezept selbst: dieser Link funktioniert ohne Konto.',
       'Dein Benutzername ist das, was andere von dir sehen; du kannst ihn hier ändern.',
       'Kochbücher, die andere mit dir geteilt haben, stehen oben auf dieser Seite und lassen sich wieder verlassen.',
+      'Abmelden findest du unter „Verwalten“, unter den anderen Einträgen.',
     ],
   },
 ];

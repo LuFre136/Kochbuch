@@ -5,6 +5,14 @@
 
 export const NEWS = [
   {
+    version: '2026-10-18-nav',
+    title: 'Kopfzeile aufgeräumt',
+    lines: [
+      { text: 'Abmelden steht jetzt unter „Verwalten“, nicht mehr oben in der Leiste.', ziel: '#/verwalten' },
+      { text: '„+ Rezept“ erscheint nur noch auf der Rezept-Übersicht, damit oben mehr Platz ist.' },
+    ],
+  },
+  {
     version: '2026-10-18',
     title: 'Hilfe und Nährwerte',
     lines: [

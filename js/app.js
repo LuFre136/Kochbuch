@@ -316,13 +316,10 @@ function renderNav() {
   }
   const [first, , action] = route();
   const topic = helpFor(first, action);
+  // "+ Rezept" steht nur auf der Übersicht; Abmelden liegt unter "Verwalten".
   nav.innerHTML = `
-    <a class="btn primary small" href="#/neu">+ Rezept</a>
-    ${topic ? '<button class="icon-btn" id="help-btn" aria-label="Hilfe zu dieser Seite" title="Hilfe zu dieser Seite">?</button>' : ''}
-    <button class="btn ghost small" id="logout" title="${esc(session.user.email)}">Abmelden</button>`;
-  $('#logout', nav).onclick = async () => {
-    await supabase.auth.signOut();
-  };
+    ${first ? '' : '<a class="btn primary small" href="#/neu">+ Rezept</a>'}
+    ${topic ? '<button class="icon-btn" id="help-btn" aria-label="Hilfe zu dieser Seite" title="Hilfe zu dieser Seite">?</button>' : ''}`;
   const help = $('#help-btn', nav);
   if (help) help.onclick = () => openHelpSheet(topic);
 }
@@ -2985,8 +2982,15 @@ function renderManage() {
         <strong>Was ist neu</strong>
         <small>Die Änderungen der letzten Fassungen noch einmal ansehen</small>
       </button>
+      <button type="button" class="manage-item card-panel" id="logout">
+        <strong>Abmelden</strong>
+        <small>Angemeldet als ${esc(session.user.email)}</small>
+      </button>
     </nav>`;
   $('#news-again').onclick = () => openNewsSheet(NEWS.slice(0, 2));
+  $('#logout').onclick = async () => {
+    await supabase.auth.signOut();
+  };
 }
 
 const helpLines = (topic) => `<ul class="help-lines">${topic.lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>`;
