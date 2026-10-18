@@ -53,7 +53,7 @@ Die Schritte der Ausgangsrezepte werden in der Reihenfolge angetippt, in der gek
 
 ## Verwalten und Hilfe
 
-Der letzte Reiter heißt „Verwalten“ und führt auf eine Sammelseite mit zwei Zielen: **Teilen** (die frühere Seite „Geteilt“: Kochbuch freigeben, einzeln geteilte Rezepte, Kochbücher anderer, Benutzername) und **Hilfe**.
+Der letzte Reiter heißt „Verwalten“ und führt auf eine Sammelseite: **Teilen** (die frühere Seite „Geteilt“: Kochbuch freigeben, einzeln geteilte Rezepte, Kochbücher anderer, Benutzername), **Hilfe**, **Was ist neu** und **Abmelden**. In der Kopfzeile stehen deshalb nur noch „+ Rezept“ (und das nur auf der Rezept-Übersicht) und das Fragezeichen.
 
 Die Hilfeseite (`#/hilfe`) zeigt alle Themen als aufklappbare Abschnitte. Die Texte stehen in [`js/help.js`](js/help.js), ein Eintrag je Thema mit `id`, `title`, `lines` und optional `routes`. `routes` nennt die Seiten, auf denen das Fragezeichen oben rechts dieses Thema öffnet (`helpFor(first, action)`); ein Thema ohne `routes` steht nur auf der Hilfeseite. Im Blatt des Fragezeichens führt „Ganze Hilfe“ nach `#/hilfe/<id>`, wo genau dieser Abschnitt offen steht. Neue Hilfe schreibt man also nur in `js/help.js` — Seite und Knopf nehmen sie von dort.
 
