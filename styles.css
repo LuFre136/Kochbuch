@@ -602,3 +602,13 @@ dialog.sheet.full {
 .people li .eye + .danger-link { margin-left: 0; }
 .people li.book-hidden > a { color: var(--muted); }
 .people li.book-hidden .eye { color: var(--muted); opacity: 0.7; }
+
+/* Einladungsseite und Teilen */
+.invite { display: grid; gap: 12px; max-width: 520px; margin: 16px auto; }
+.invite h1 { margin: 0; font-size: 1.4rem; }
+.invite p { margin: 0; }
+.invite-image { width: 100%; max-height: 220px; object-fit: cover; border-radius: 10px; }
+.people li.given { display: block; }
+.given-people { list-style: none; padding: 4px 0 0 12px; margin: 0; }
+.given-people li { padding: 4px 0; border: 0; }
+.row-actions { display: flex; gap: 12px; flex: none; }

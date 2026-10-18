@@ -265,10 +265,15 @@ async function render() {
   const [first, id, action, extra] = route();
   renderTabbar(first);
   leaveShoppingList();
-  // Geteilte Einzelrezepte kann man auch ohne Konto ansehen.
-  if (first === 'teilen' && id) {
+  // Alte Links (Rezept- und Listen-Einladungen) führen auf die gemeinsame Einladungsseite.
+  if ((first === 'teilen' || first === 'liste') && id) {
+    location.replace(`#/einladung/${encodeURIComponent(id)}`);
+    return;
+  }
+  // Eine Einladung kann man auch ohne Konto ansehen und ablehnen.
+  if (first === 'einladung' && id && (!session || myName)) {
     renderNav();
-    return guarded(() => renderSharedLink(id));
+    return guarded(() => renderInvite(id));
   }
   if (!session) {
     return renderLogin({
@@ -286,8 +291,8 @@ async function render() {
     else if (first === 'geteilt') await renderSharing();
     else if (first === 'plan') await renderPlan();
     else if (first === 'einkauf') await renderShopping(id);
-    else if (first === 'liste' && id) await acceptListInvite(id);
-    else if (first === 'einladung' && id) await acceptInvite(id);
+    else if (first === 'einladung' && id) await renderInvite(id);
+    else if (first === 'erhalten' && id) await renderReceived(id);
     else if (first === 'kochbuch' && id && action) await renderCookbookRecipe(id, action, extra);
     else if (first === 'kochbuch' && id) await renderCookbook(id);
     else if (first === 'kochen') await renderPantry();
@@ -554,19 +559,30 @@ function setIncludeShared(on) {
 // Eigene Rezepte, plus die aus geteilten Kochbüchern, wenn gewünscht. sharedBooks: Anzahl
 // geteilter Kochbücher. Ausgeblendete Kochbücher (Auge unter "Teilen") bleiben außen vor.
 async function searchableRecipes() {
-  const [own, people] = await Promise.all([loadRecipes(), loadPeople().catch(() => ({ owners: [] })), loadAlternatives()]);
+  const [own, people, shares] = await Promise.all([
+    loadRecipes(), loadPeople().catch(() => ({ owners: [] })), loadRecipeShares().catch(() => []), loadAlternatives(),
+  ]);
   const owners = people.owners.filter((o) => !o.hidden);
-  if (!owners.length || !includeShared()) return { all: own, sharedBooks: owners.length };
-  const books = await Promise.all(owners.map((o) => loadCookbook(o.owner_id)));
+  const received = shares.filter((x) => x.user_id === session.user.id);
+  const sources = owners.length + received.length;
+  if (!sources || !includeShared()) return { all: own, sharedBooks: sources };
+  const [books, single] = await Promise.all([
+    Promise.all(owners.map((o) => loadCookbook(o.owner_id))),
+    loadReceived(received),
+  ]);
   const shared = books.filter(Boolean).flatMap((b) => b.recipes.map((r) => ({ ...r, from: b.email })));
-  return { all: [...own, ...shared], sharedBooks: owners.length };
+  const seen = new Set(shared.map((r) => r.id));
+  return { all: [...own, ...shared, ...single.filter((r) => !seen.has(r.id))], sharedBooks: sources };
 }
 
-const recipeHref = (r) => (r.from ? `#/kochbuch/${r.owner_id}/${r.id}` : `#/r/${r.id}`);
+const recipeHref = (r) => {
+  if (r.received) return `#/erhalten/${r.id}`;
+  return r.from ? `#/kochbuch/${r.owner_id}/${r.id}` : `#/r/${r.id}`;
+};
 
 function sharedToggle(sharedBooks) {
   return sharedBooks ? `<label class="check"><input type="checkbox" id="include-shared" ${includeShared() ? 'checked' : ''}>
-    Auch Rezepte aus Kochbüchern, die mit mir geteilt wurden</label>` : '';
+    Auch Rezepte, die andere mit mir geteilt haben</label>` : '';
 }
 
 function bindSharedToggle(rerender) {
@@ -676,7 +692,10 @@ function tagFilter(container, recipes, selected, onChange) {
   return (list) => (selected.size ? list.filter((h) => h.recipe.tags.some((t) => selected.has(t))) : list);
 }
 
-const fromLine = (r) => (r.from ? `<p class="from-book">aus dem Kochbuch von ${esc(r.from)}</p>` : '');
+const fromLine = (r) => {
+  if (r.received) return `<p class="from-book">von ${esc(r.from)} mit dir geteilt</p>`;
+  return r.from ? `<p class="from-book">aus dem Kochbuch von ${esc(r.from)}</p>` : '';
+};
 
 function pantryTabs(active) {
   return `<nav class="segmented" aria-label="Was kochen?">
@@ -1108,7 +1127,6 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
         <button class="btn primary" id="plan-btn">Einplanen</button>
         <a class="btn" href="#/r/${r.id}/bearbeiten">Bearbeiten</a>
         <button class="btn" id="share">Teilen</button>
-        ${r.share_token ? '<button class="btn ghost" id="unshare">Teilen beenden</button>' : ''}
         <button class="btn danger" id="del">Löschen</button>` : session
     ? '<button class="btn primary" id="copy">In mein Kochbuch übernehmen</button>'
     : '<button class="btn primary" id="login-copy">Anmelden, um das Rezept zu übernehmen</button>'}
@@ -1286,21 +1304,7 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
 
   setupPlanning(r, () => servings);
 
-  $('#share').onclick = async () => {
-    const hadToken = Boolean(r.share_token);
-    if (await shareRecipe(r) && !hadToken) showRecipe(r, { own, back, backLabel });
-  };
-  const unshare = $('#unshare');
-  if (unshare) {
-    unshare.onclick = async () => {
-      if (!confirm('Der bisherige Link funktioniert danach nicht mehr. Teilen beenden?')) return;
-      const { error } = await supabase.from('recipes').update({ share_token: null }).eq('id', r.id);
-      if (error) { toast(error.message); return; }
-      r.share_token = null;
-      toast('Link deaktiviert');
-      showRecipe(r, { own, back, backLabel });
-    };
-  }
+  $('#share').onclick = () => shareRecipe(r);
 
   $('#del').onclick = async () => {
     if (await deleteRecipe(r)) location.hash = '#/';
@@ -1314,21 +1318,9 @@ const NUTRIENTS = [
 const hasNutrition = (n) => Boolean(n) && NUTRIENTS.some(([k]) => n[k] != null);
 const formatNutrient = (v) => String(v).replace('.', ',');
 
-// Erzeugt bei Bedarf einen Teilen-Link und öffnet das Teilen-Menü. Liefert true bei Erfolg.
-async function shareRecipe(r) {
-  try {
-    if (!r.share_token) {
-      const token = crypto.randomUUID();
-      const { error } = await supabase.from('recipes').update({ share_token: token }).eq('id', r.id);
-      if (error) throw error;
-      r.share_token = token;
-    }
-    await shareLink(appUrl(`teilen/${r.share_token}`), r.title);
-    return true;
-  } catch (err) {
-    toast(`Teilen fehlgeschlagen: ${err.message}`);
-    return false;
-  }
+// Schickt ein Rezept als Einladung an eine Person.
+function shareRecipe(r) {
+  return shareInvite({ kind: 'recipe', recipe_id: r.id }, r.title);
 }
 
 // Fragt nach und löscht ein eigenes Rezept samt Bildern. Liefert true, wenn gelöscht wurde.
@@ -2576,10 +2568,9 @@ async function renderShopping(listId) {
         </div>
         ${ownCount > 1 ? '' : '<p class="hint">Deine einzige Liste kann nicht gelöscht werden.</p>'}
         <h3>Gemeinsam bearbeiten</h3>
-        <p class="hint">Wer den Einladungslink öffnet und ein Konto hat, kann diese Liste mitbearbeiten.</p>
+        <p class="hint">Wer den Einladungslink annimmt und ein Konto hat, kann diese Liste mitbearbeiten. Jeder Link gilt für eine Person.</p>
         <div class="row">
-          <button class="btn primary" id="list-invite">${list.invite_token ? 'Einladungslink teilen' : 'Einladungslink erstellen'}</button>
-          ${list.invite_token ? '<button class="btn ghost" id="list-invite-reset">Neuen Link erzeugen</button>' : ''}
+          <button class="btn primary" id="list-invite">Einladungslink teilen</button>
         </div>
         ${members.length ? `<ul class="people">${members.map((p) => `<li><span>${esc(personName(p))}</span>
           <button class="link danger-link" data-member="${p.user_id}">Entfernen</button></li>`).join('')}</ul>` : ''}`
@@ -2839,24 +2830,7 @@ async function renderShopping(listId) {
       location.hash = '#/einkauf';
     };
   }
-  const invite = async (reset) => {
-    const before = list.invite_token;
-    let token = before;
-    if (!token || reset) {
-      const { data, error } = await supabase.from('shopping_lists').update({ invite_token: crypto.randomUUID() })
-        .eq('id', list.id).select('invite_token').single();
-      if (error) { toast(error.message); return; }
-      token = data.invite_token;
-    }
-    await shareLink(appUrl(`liste/${token}`), list.name);
-    if (token !== before) renderShopping(list.id);
-  };
-  if (byId('#list-invite')) byId('#list-invite').onclick = () => invite(false);
-  if (byId('#list-invite-reset')) {
-    byId('#list-invite-reset').onclick = () => {
-      if (confirm('Der bisherige Einladungslink funktioniert danach nicht mehr. Wer schon mitmacht, bleibt dabei. Fortfahren?')) invite(true);
-    };
-  }
+  if (byId('#list-invite')) byId('#list-invite').onclick = () => shareInvite({ kind: 'list', list_id: list.id }, list.name);
   app.querySelectorAll('[data-member]').forEach((b) => {
     b.onclick = async () => {
       if (!confirm('Diese Person von der Liste entfernen?')) return;
@@ -2910,17 +2884,6 @@ function sortItems(items, sort) {
   return list;
 }
 
-async function acceptListInvite(token) {
-  app.innerHTML = '<p class="loading">Nehme Einladung an …</p>';
-  const { data: listId, error } = await supabase.rpc('accept_list_invite', { p_token: token });
-  if (error) {
-    app.innerHTML = `<div class="notice"><p>${esc(error.message)}</p><a class="btn" href="#/einkauf">Zu meinen Einkaufslisten</a></div>`;
-    return;
-  }
-  toast('Du kannst die Liste jetzt mitbearbeiten');
-  location.replace(`#/einkauf/${listId}`);
-}
-
 // ---------- Teilen ----------
 
 function appUrl(path) {
@@ -2932,9 +2895,9 @@ async function shareLink(url, title) {
   if (navigator.share) {
     try {
       await navigator.share({ title, url });
-      return;
+      return 'shared';
     } catch (err) {
-      if (err.name === 'AbortError') return;
+      if (err.name === 'AbortError') return 'aborted';
     }
   }
   try {
@@ -2943,6 +2906,43 @@ async function shareLink(url, title) {
   } catch {
     prompt('Link zum Kopieren:', url);
   }
+  return 'copied';
+}
+
+const SQL_MISSING = new Set(['PGRST202', 'PGRST205', '42P01', '42883']);
+const inviteProblem = (error) => (SQL_MISSING.has(error.code)
+  ? 'Für Einladungen fehlt in Supabase noch supabase/einladungen.sql.' : error.message);
+
+// Legt eine Einladung an (row: kind plus recipe_id oder list_id) und öffnet das Teilen-Menü.
+// Jeder Link gilt für eine Person. Wird das Teilen abgebrochen, wird die Einladung gleich
+// wieder zurückgezogen, damit kein ungenutzter Link herumliegt.
+async function shareInvite(row, title) {
+  const { data, error } = await supabase.from('invites').insert(row).select('id, token').single();
+  if (error) { toast(inviteProblem(error)); return false; }
+  const result = await shareLink(appUrl(`einladung/${data.token}`), title);
+  if (result === 'aborted') {
+    await supabase.rpc('withdraw_invite', { p_id: data.id });
+    return false;
+  }
+  if (result === 'shared') toast('Der Link gilt für eine Person');
+  return true;
+}
+
+// Einzeln geteilte Rezepte: was ich verschickt und was ich bekommen habe, mit Namen.
+async function loadRecipeShares() {
+  const { data, error } = await supabase.rpc('recipe_share_people');
+  if (error) throw error;
+  return data;
+}
+
+// Die Rezepte zu den Freigaben, die ich bekommen habe, markiert mit received und from.
+async function loadReceived(received) {
+  if (!received.length) return [];
+  const { data, error } = await supabase.from('recipes').select('*').in('id', received.map((x) => x.recipe_id));
+  if (error) throw error;
+  const byId = new Map(received.map((x) => [x.recipe_id, x]));
+  return data.map((r) => ({ ...r, received: true, from: byId.get(r.id)?.owner_name ?? 'jemand' }))
+    .sort((a, b) => collator.compare(a.title, b.title));
 }
 
 // Kopiert ein fremdes Rezept samt Bildern ins eigene Kochbuch.
@@ -2993,22 +2993,86 @@ async function copyRecipe(r, button) {
   }
 }
 
-async function renderSharedLink(token) {
-  app.innerHTML = '<p class="loading">Lade Rezept …</p>';
-  const { data, error } = await supabase.rpc('get_shared_recipe', { p_token: token });
-  if (error) throw error;
-  const r = data?.[0];
-  if (!r) {
-    app.innerHTML = `<div class="notice"><p>Dieses Rezept wird nicht mehr geteilt.</p>
+const INVITE_TEXT = {
+  cookbook: (i) => ({ title: `Kochbuch von ${i.owner_name}`, text: `Du kannst alle Rezepte von ${i.owner_name} ansehen und in dein Kochbuch übernehmen, aber nichts ändern.` }),
+  list: (i) => ({ title: `Einkaufsliste „${i.title ?? 'Einkaufsliste'}“`, text: `Du kannst die Liste zusammen mit ${i.owner_name} bearbeiten. Änderungen sehen alle sofort.` }),
+  recipe: (i) => ({ title: `Rezept „${i.title ?? 'Rezept'}“`, text: `${i.owner_name} schickt dir dieses Rezept. Nach dem Annehmen findest du es unter „Teilen“ und kannst es in dein Kochbuch übernehmen.` }),
+};
+
+const inviteTarget = (kind, target) => ({ cookbook: `#/kochbuch/${target}`, list: `#/einkauf/${target}`, recipe: `#/erhalten/${target}` }[kind]);
+
+// Die Einladungsseite für Rezepte, Kochbücher und Einkaufslisten. Annehmen braucht ein
+// Konto, Ablehnen nicht. Danach ist der Link verbraucht.
+async function renderInvite(token) {
+  app.innerHTML = '<p class="loading">Lade Einladung …</p>';
+  const { data, error } = await supabase.rpc('invite_info', { p_token: token });
+  const notice = (text, link = session ? '<a class="btn" href="#/">Zu meinen Rezepten</a>' : '') => {
+    app.innerHTML = `<div class="notice"><p>${esc(text)}</p>${link}</div>`;
+  };
+  if (error) { notice(SQL_MISSING.has(error.code) ? 'Einladungen sind noch nicht eingerichtet (supabase/einladungen.sql fehlt).' : error.message); return; }
+  const inv = data?.[0];
+  if (!inv) { notice('Diese Einladung gibt es nicht.'); return; }
+  const { title, text } = INVITE_TEXT[inv.kind](inv);
+  const head = `<div class="invite card-panel">
+      <p class="hint">Einladung von ${esc(inv.owner_name)}</p>
+      ${inv.image ? `<img class="invite-image" src="${esc(imageUrl(inv.image))}" alt="">` : ''}
+      <h1>${esc(title)}</h1>`;
+  if (inv.status !== 'offen') {
+    app.innerHTML = `${head}<p>${inv.status === 'zurueckgezogen' ? 'Diese Einladung wurde zurückgezogen.' : 'Diese Einladung wurde schon verwendet. Jeder Link gilt nur für eine Person; bitte um einen neuen.'}</p>
       ${session ? '<a class="btn" href="#/">Zu meinen Rezepten</a>' : ''}</div>`;
     return;
   }
-  if (session && r.owner_id === session.user.id) {
-    showRecipe(r, { own: false, back: `#/r/${r.id}`, backLabel: 'Zu deinem Rezept', from: 'So sehen andere dein geteiltes Rezept.' });
-    $('.actions').innerHTML = '';
+  if (inv.own) {
+    app.innerHTML = `${head}<p>Das ist deine eigene Einladung. Schick den Link an die Person, die du einladen möchtest. Er gilt für genau eine Person.</p>
+      <a class="btn" href="#/geteilt">Zu „Teilen“</a></div>`;
     return;
   }
-  showRecipe(r, { own: false, back: session ? '#/' : '', backLabel: 'Meine Rezepte', from: 'Geteiltes Rezept' });
+  if (inv.already) {
+    app.innerHTML = `${head}<p>Du hast schon Zugriff. Der Link bleibt für jemand anderen gültig.</p>
+      <a class="btn primary" href="${inviteTarget(inv.kind, inv.target_id)}">Öffnen</a></div>`;
+    return;
+  }
+  app.innerHTML = `${head}<p>${esc(text)}</p>
+      <div class="row">
+        <button class="btn primary" id="accept">${session ? 'Annehmen' : 'Anmelden und annehmen'}</button>
+        <button class="btn" id="decline">Ablehnen</button>
+      </div>
+      <p class="hint">Der Link gilt nur einmal: Nach Annehmen oder Ablehnen ist er verbraucht.</p>
+      <p class="hint" id="msg" role="status"></p></div>`;
+  const respond = async (accept) => {
+    app.querySelectorAll('.invite button').forEach((b) => { b.disabled = true; });
+    const { data: res, error: e } = await supabase.rpc('respond_invite', { p_token: token, p_accept: accept });
+    if (e) {
+      $('#msg').textContent = e.message;
+      app.querySelectorAll('.invite button').forEach((b) => { b.disabled = false; });
+      return;
+    }
+    const r = res?.[0];
+    if (!accept) { notice('Einladung abgelehnt. Der Link ist damit verbraucht.'); return; }
+    cookbookCache.clear();
+    toast({ cookbook: 'Einladung angenommen', list: 'Du kannst die Liste jetzt mitbearbeiten', recipe: 'Rezept angenommen' }[r.kind]);
+    location.replace(inviteTarget(r.kind, r.target_id));
+  };
+  $('#accept').onclick = () => {
+    if (!session) { renderLogin('Melde dich an oder registriere dich, um die Einladung anzunehmen.'); return; }
+    respond(true);
+  };
+  $('#decline').onclick = () => {
+    if (confirm('Einladung ablehnen? Der Link ist danach verbraucht.')) respond(false);
+  };
+}
+
+// Ein Rezept, das jemand einzeln mit mir geteilt hat.
+async function renderReceived(id) {
+  app.innerHTML = '<p class="loading">Lade Rezept …</p>';
+  const shares = await loadRecipeShares();
+  const share = shares.find((x) => x.recipe_id === id && x.user_id === session.user.id);
+  const [r] = share ? await loadReceived([share]) : [];
+  if (!r) {
+    app.innerHTML = '<div class="notice"><p>Dieses Rezept ist nicht (mehr) mit dir geteilt.</p><a class="btn" href="#/geteilt">Zu „Teilen“</a></div>';
+    return;
+  }
+  showRecipe(r, { own: false, back: '#/geteilt', backLabel: 'Teilen', from: `Von ${r.from} mit dir geteilt` });
 }
 
 async function loadPeople() {
@@ -3101,14 +3165,26 @@ async function openNewsSheet(entries) {
 
 async function renderSharing() {
   app.innerHTML = `<p class="loading">Lade …</p>`;
-  const [own, people, invite] = await Promise.all([
+  const me = session.user.id;
+  const [own, people, shares, invites, lists] = await Promise.all([
     loadRecipes(),
     loadPeople(),
-    supabase.from('cookbook_invites').select('token').maybeSingle(),
+    loadRecipeShares().catch(() => null),
+    supabase.from('invites').select('*').eq('owner_id', me).eq('status', 'offen').order('created_at'),
+    supabase.from('shopping_lists').select('id, name').eq('owner_id', me),
   ]);
-  if (invite.error) throw invite.error;
-  const token = invite.data?.token;
-  const sharedRecipes = own.filter((r) => r.share_token);
+  const ready = shares !== null && !invites.error; // false, solange einladungen.sql fehlt
+  const received = await loadReceived((shares ?? []).filter((x) => x.user_id === me));
+  // Verschickte Rezepte: je Rezept die Personen, die es angenommen haben.
+  const given = new Map();
+  (shares ?? []).filter((x) => x.owner_id === me).forEach((x) => {
+    if (!given.has(x.recipe_id)) given.set(x.recipe_id, []);
+    given.get(x.recipe_id).push(x);
+  });
+  const titleOf = (id) => own.find((r) => r.id === id)?.title ?? 'Gelöschtes Rezept';
+  const listName = (id) => (lists.data ?? []).find((l) => l.id === id)?.name ?? 'Einkaufsliste';
+  const inviteLabel = (i) => ({ cookbook: 'Mein Kochbuch', recipe: `Rezept „${titleOf(i.recipe_id)}“`, list: `Einkaufsliste „${listName(i.list_id)}“` }[i.kind]);
+  const open = invites.data ?? [];
   const { readers, owners } = people;
 
   app.innerHTML = `
@@ -3131,15 +3207,20 @@ async function renderSharing() {
         : '<p class="hint">Noch keine. Wenn dir jemand einen Einladungslink schickt, erscheint sein Kochbuch hier.</p>'}
     </section>
 
+    ${ready ? `<section class="card-panel share-section">
+      <h2>Mit mir geteilte Rezepte</h2>
+      ${received.length ? `<ul class="people">${received.map((r) => `<li>
+          <a href="#/erhalten/${r.id}">${esc(r.title)} <small class="hint">von ${esc(r.from)}</small></a>
+          <button class="link danger-link" data-drop="${r.id}">Entfernen</button>
+        </li>`).join('')}</ul>`
+        : '<p class="hint">Noch keine. Wenn dir jemand ein Rezept schickt und du annimmst, steht es hier.</p>'}
+    </section>` : ''}
+
     <section class="card-panel share-section">
       <h2>Mein Kochbuch freigeben</h2>
-      <p class="hint">Wer den Einladungslink öffnet und ein Konto hat, kann alle deine Rezepte ansehen und übernehmen, aber nichts ändern.</p>
-      ${token ? `<div class="row">
-          <button class="btn primary" id="invite-share">Einladungslink teilen</button>
-          <button class="btn ghost" id="invite-reset">Neuen Link erzeugen</button>
-        </div>
-        <p class="hint">Ein neuer Link macht den alten ungültig. Wer schon Zugriff hat, behält ihn.</p>`
-        : '<button class="btn primary" id="invite-create">Einladungslink erstellen</button>'}
+      <p class="hint">Wer die Einladung annimmt und ein Konto hat, kann alle deine Rezepte ansehen und übernehmen, aber nichts ändern. Familiengeheimnisse sieht niemand.</p>
+      <div class="row"><button class="btn primary" id="invite-share">Einladungslink teilen</button></div>
+      <p class="hint">Jeder Link gilt für eine Person. Für mehrere Leute teilst du einfach mehrmals.</p>
       <h3>Lesezugriff haben</h3>
       ${readers.length ? `<ul class="people">${readers.map((p) => `<li>
           <span>${esc(readerName(p))}</span>
@@ -3149,22 +3230,24 @@ async function renderSharing() {
 
     <section class="card-panel share-section">
       <h2>Einzeln geteilte Rezepte</h2>
-      ${sharedRecipes.length ? `<ul class="people">${sharedRecipes.map((r) => `<li>
-          <a href="#/r/${r.id}">${esc(r.title)}</a>
-          <button class="link" data-share="${r.id}">Link teilen</button>
+      ${given.size ? `<ul class="people">${[...given].map(([id, people]) => `<li class="given">
+          <a href="#/r/${id}">${esc(titleOf(id))}</a>
+          <ul class="given-people">${people.map((x) => `<li><span>${esc(x.user_name)}</span>
+            <button class="link danger-link" data-unshare="${id}" data-user="${x.user_id}">Entfernen</button></li>`).join('')}</ul>
         </li>`).join('')}</ul>`
-        : '<p class="hint">Öffne ein Rezept und tippe auf „Teilen“, um es per Link zu verschicken.</p>'}
-    </section>`;
+        : '<p class="hint">Öffne ein Rezept und tippe auf „Teilen“, um es an eine Person zu schicken.</p>'}
+    </section>
 
-  const createInvite = async (reset) => {
-    const query = reset
-      ? supabase.from('cookbook_invites').update({ token: crypto.randomUUID() }).eq('owner_id', session.user.id).select('token').single()
-      : supabase.from('cookbook_invites').insert({}).select('token').single();
-    const { data, error } = await query;
-    if (error) { toast(error.message); return; }
-    await shareLink(appUrl(`einladung/${data.token}`), 'Mein Kochbuch');
-    renderSharing();
-  };
+    ${open.length ? `<section class="card-panel share-section">
+      <h2>Offene Einladungen</h2>
+      <p class="hint">Verschickt, aber noch nicht beantwortet. Sobald jemand annimmt oder ablehnt, verschwindet der Link hier.</p>
+      <ul class="people">${open.map((i) => `<li>
+          <span>${esc(inviteLabel(i))} <small class="hint">${esc(new Date(i.created_at).toLocaleDateString('de-DE'))}</small></span>
+          <span class="row-actions"><button class="link" data-resend="${i.id}">Link teilen</button>
+          <button class="link danger-link" data-withdraw="${i.id}">Zurückziehen</button></span>
+        </li>`).join('')}</ul>
+    </section>` : ''}`;
+
   const byId = (id) => app.querySelector(id);
   if (byId('#rename-me')) {
     byId('#rename-me').onclick = async () => {
@@ -3185,13 +3268,9 @@ async function renderSharing() {
       renderSharing();
     };
   }
-  if (byId('#invite-create')) byId('#invite-create').onclick = () => createInvite(false);
-  if (byId('#invite-share')) byId('#invite-share').onclick = () => shareLink(appUrl(`einladung/${token}`), 'Mein Kochbuch');
-  if (byId('#invite-reset')) {
-    byId('#invite-reset').onclick = () => {
-      if (confirm('Der bisherige Einladungslink funktioniert danach nicht mehr. Fortfahren?')) createInvite(true);
-    };
-  }
+  byId('#invite-share').onclick = async () => {
+    if (await shareInvite({ kind: 'cookbook' }, 'Mein Kochbuch')) renderSharing();
+  };
   app.querySelectorAll('[data-remove]').forEach((b) => {
     b.onclick = async () => {
       if (!confirm('Lesezugriff entfernen?')) return;
@@ -3217,30 +3296,35 @@ async function renderSharing() {
       if (error) toast(error.message); else renderSharing();
     };
   });
-  app.querySelectorAll('[data-share]').forEach((b) => {
-    const r = own.find((x) => x.id === b.dataset.share);
-    b.onclick = () => shareLink(appUrl(`teilen/${r.share_token}`), r.title);
+  app.querySelectorAll('[data-drop]').forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm('Dieses Rezept aus „Mit mir geteilt“ entfernen? Du brauchst dann eine neue Einladung.')) return;
+      const { error } = await supabase.from('recipe_shares').delete().eq('recipe_id', b.dataset.drop).eq('user_id', me);
+      if (error) toast(error.message); else renderSharing();
+    };
+  });
+  app.querySelectorAll('[data-unshare]').forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm('Diese Person kann das Rezept danach nicht mehr sehen. Entfernen?')) return;
+      const { error } = await supabase.from('recipe_shares').delete().eq('recipe_id', b.dataset.unshare).eq('user_id', b.dataset.user);
+      if (error) toast(error.message); else renderSharing();
+    };
+  });
+  app.querySelectorAll('[data-resend]').forEach((b) => {
+    const i = open.find((x) => x.id === b.dataset.resend);
+    b.onclick = () => shareLink(appUrl(`einladung/${i.token}`), inviteLabel(i));
+  });
+  app.querySelectorAll('[data-withdraw]').forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm('Einladung zurückziehen? Der Link funktioniert danach nicht mehr.')) return;
+      const { error } = await supabase.rpc('withdraw_invite', { p_id: b.dataset.withdraw });
+      if (error) toast(error.message); else renderSharing();
+    };
   });
 }
 
 const EYE = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
 const EYE_OFF = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7c2 0 3.7.6 5.1 1.5M22 12s-3.5 7-10 7c-2 0-3.7-.6-5.1-1.5"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/><path d="M3 3l18 18"/></svg>';
-
-async function acceptInvite(token) {
-  app.innerHTML = '<p class="loading">Nehme Einladung an …</p>';
-  const { data: owner, error } = await supabase.rpc('accept_cookbook_invite', { p_token: token });
-  if (error) {
-    app.innerHTML = `<div class="notice"><p>${esc(error.message)}</p><a class="btn" href="#/">Zu meinen Rezepten</a></div>`;
-    return;
-  }
-  if (owner === session.user.id) {
-    toast('Das ist dein eigener Einladungslink');
-    location.replace('#/geteilt');
-    return;
-  }
-  toast('Einladung angenommen');
-  location.replace(`#/kochbuch/${owner}`);
-}
 
 const cookbookCache = new Map();
 
