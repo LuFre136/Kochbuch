@@ -5,6 +5,13 @@
 
 export const NEWS = [
   {
+    version: '2026-10-18-zurueckteilen',
+    title: 'Kochbuch zurückteilen',
+    lines: [
+      { text: 'Nimmst du eine Einladung zu einem Kochbuch an, kannst du dein eigenes gleich zurückteilen. Die andere Person bekommt das Angebot in die Glocke und entscheidet dort.', ziel: '#/hilfe/teilen' },
+    ],
+  },
+  {
     version: '2026-10-18-glocke',
     title: 'Glocke oben rechts',
     lines: [

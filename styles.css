@@ -629,3 +629,7 @@ dialog.sheet.full {
 .note-btn small { color: var(--muted); font-size: 0.8rem; }
 .note.unread .note-btn { background: var(--surface-2); border-color: var(--accent); font-weight: 600; }
 .note.unread .note-btn span::before { content: ''; display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--accent); vertical-align: middle; }
+.note.offer .note-btn { cursor: default; }
+.note.offer .row { margin-top: 6px; }
+.note.offer .note-btn { cursor: default; }
+.note.offer .row { margin-top: 6px; }

@@ -387,7 +387,23 @@ function noteContent(n) {
     if (n.target_kind === 'list') return { text: `${n.actor_name} hat deine Einladung zur Einkaufsliste „${n.title ?? 'Einkaufsliste'}“ angenommen.`, href: `#/einkauf/${n.target_id}` };
     return { text: `${n.actor_name} hat deine Einladung zu deinem Kochbuch angenommen.`, href: '#/geteilt' };
   }
+  if (n.kind === 'share_back') {
+    return { text: `${n.actor_name} möchte das eigene Kochbuch mit dir teilen.`, href: '#/geteilt', offer: true };
+  }
   return { text: `Neues von ${n.actor_name}.`, href: '#/geteilt' };
+}
+
+const OFFER_STATE = { angenommen: 'Angenommen', abgelehnt: 'Abgelehnt', zurueckgezogen: 'Zurückgezogen' };
+
+// Antwort auf ein Angebot aus der Glocke (Zurückteilen).
+async function answerOffer(inviteId, accept) {
+  const { data, error } = await supabase.rpc('respond_direct_invite', { p_id: inviteId, p_accept: accept });
+  if (error) { toast(error.message); return; }
+  await loadNotifications();
+  if (!accept) { toast('Abgelehnt'); return; }
+  cookbookCache.clear();
+  toast('Angenommen');
+  location.hash = `#/kochbuch/${data[0].owner_id}`;
 }
 
 function formatWhen(iso) {
@@ -409,7 +425,16 @@ async function openNotifications() {
   const unread = shown.filter((n) => !n.read_at).map((n) => n.id);
   const { value } = await openSheet(`<h2>Benachrichtigungen</h2>
     ${shown.length ? `<ul class="notes">${shown.map((n) => {
-      const { text, href } = noteContent(n);
+      const { text, href, offer } = noteContent(n);
+      if (offer) {
+        // Ein Angebot lässt sich hier direkt beantworten, genau einmal.
+        return `<li class="note offer${n.read_at ? '' : ' unread'}"><div class="note-btn">
+          <span>${esc(text)}</span><small>${esc(formatWhen(n.created_at))}</small>
+          ${n.invite_status === 'offen' ? `<div class="row">
+            <button class="btn small primary" value="annehmen:${n.invite_id}" formnovalidate>Annehmen</button>
+            <button class="btn small" value="ablehnen:${n.invite_id}" formnovalidate>Ablehnen</button></div>`
+    : `<small>${esc(OFFER_STATE[n.invite_status] ?? '')}</small>`}</div></li>`;
+      }
       return `<li class="note${n.read_at ? '' : ' unread'}"><button class="note-btn" value="${esc(href)}" formnovalidate>
         <span>${esc(text)}</span><small>${esc(formatWhen(n.created_at))}</small></button></li>`;
     }).join('')}</ul>` : '<p class="hint">Keine Benachrichtigungen.</p>'}
@@ -424,6 +449,8 @@ async function openNotifications() {
     }
   }
   if (value.startsWith('#/')) location.hash = value;
+  const [answer, inviteId] = value.split(':');
+  if (inviteId && (answer === 'annehmen' || answer === 'ablehnen')) await answerOffer(inviteId, answer === 'annehmen');
 }
 
 // ---------- Benutzername ----------
@@ -3145,6 +3172,7 @@ async function renderInvite(token) {
     if (!accept) { notice('Einladung abgelehnt. Der Link ist damit verbraucht.'); return; }
     cookbookCache.clear();
     toast({ cookbook: 'Einladung angenommen', list: 'Du kannst die Liste jetzt mitbearbeiten', recipe: 'Rezept angenommen' }[r.kind]);
+    if (r.kind === 'cookbook') await askShareBack(r.owner_id, inv.owner_name);
     location.replace(inviteTarget(r.kind, r.target_id));
   };
   $('#accept').onclick = () => {
@@ -3154,6 +3182,20 @@ async function renderInvite(token) {
   $('#decline').onclick = () => {
     if (confirm('Einladung ablehnen? Der Link ist danach verbraucht.')) respond(false);
   };
+}
+
+// Nach einer angenommenen Kochbuch-Einladung: das eigene Kochbuch zurückteilen? Die andere
+// Person bekommt das Angebot in ihre Glocke und entscheidet dort.
+async function askShareBack(person, name) {
+  const { data: possible, error } = await supabase.rpc('share_back_possible', { p_person: person });
+  if (error || !possible) return; // zurueckteilen.sql fehlt, oder sie liest mein Kochbuch schon
+  const { value } = await openSheet(`<h2>Dein Kochbuch auch mit ${esc(name)} teilen?</h2>
+    <p>${esc(name)} bekommt das Angebot in die Glocke und kann es annehmen oder ablehnen. Familiengeheimnisse bleiben verborgen.</p>
+    <div class="row"><button class="btn primary" value="ja">Ja, teilen</button>
+      <button class="btn ghost" value="nein" formnovalidate>Nein</button></div>`);
+  if (value !== 'ja') return;
+  const { error: e } = await supabase.rpc('offer_share_back', { p_person: person });
+  toast(e ? e.message : `Angebot an ${name} geschickt`);
 }
 
 // Ein Rezept, das jemand einzeln mit mir geteilt hat.
@@ -3260,12 +3302,13 @@ async function openNewsSheet(entries) {
 async function renderSharing() {
   app.innerHTML = `<p class="loading">Lade …</p>`;
   const me = session.user.id;
-  const [own, people, shares, invites, lists] = await Promise.all([
+  const [own, people, shares, invites, lists, invitees] = await Promise.all([
     loadRecipes(),
     loadPeople(),
     loadRecipeShares().catch(() => null),
     supabase.from('invites').select('*').eq('owner_id', me).eq('status', 'offen').order('created_at'),
     supabase.from('shopping_lists').select('id, name').eq('owner_id', me),
+    supabase.rpc('invitee_names'),
   ]);
   const ready = shares !== null && !invites.error; // false, solange einladungen.sql fehlt
   const received = await loadReceived((shares ?? []).filter((x) => x.user_id === me));
@@ -3277,7 +3320,8 @@ async function renderSharing() {
   });
   const titleOf = (id) => own.find((r) => r.id === id)?.title ?? 'Gelöschtes Rezept';
   const listName = (id) => (lists.data ?? []).find((l) => l.id === id)?.name ?? 'Einkaufsliste';
-  const inviteLabel = (i) => ({ cookbook: 'Mein Kochbuch', recipe: `Rezept „${titleOf(i.recipe_id)}“`, list: `Einkaufsliste „${listName(i.list_id)}“` }[i.kind]);
+  const inviteeName = (i) => (invitees.data ?? []).find((x) => x.invite_id === i.id)?.name ?? 'jemanden';
+  const inviteLabel = (i) => ({ cookbook: i.invitee_id ? `Mein Kochbuch an ${inviteeName(i)}` : 'Mein Kochbuch', recipe: `Rezept „${titleOf(i.recipe_id)}“`, list: `Einkaufsliste „${listName(i.list_id)}“` }[i.kind]);
   const open = invites.data ?? [];
   const { readers, owners } = people;
 
@@ -3337,7 +3381,7 @@ async function renderSharing() {
       <p class="hint">Verschickt, aber noch nicht beantwortet. Sobald jemand annimmt oder ablehnt, verschwindet der Link hier.</p>
       <ul class="people">${open.map((i) => `<li>
           <span>${esc(inviteLabel(i))} <small class="hint">${esc(new Date(i.created_at).toLocaleDateString('de-DE'))}</small></span>
-          <span class="row-actions"><button class="link" data-resend="${i.id}">Link teilen</button>
+          <span class="row-actions">${i.token ? `<button class="link" data-resend="${i.id}">Link teilen</button>` : ''}
           <button class="link danger-link" data-withdraw="${i.id}">Zurückziehen</button></span>
         </li>`).join('')}</ul>
     </section>` : ''}`;
