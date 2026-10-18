@@ -597,12 +597,17 @@ export function aiPrompt(meta: VideoMeta | null, source: AiSource): string {
   ].join('\n');
 }
 
+// Modelle in der Reihenfolge, in der sie versucht werden; GEMINI_MODEL kommt davor.
+// Google schaltet alte Modelle ab ("no longer available to new users"), deshalb steht das
+// aktuelle Flash-Modell zuerst und ein älteres sowie der "latest"-Alias als Rückfall dahinter.
+const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-flash-latest'];
+
 const RETRY_STATUS = new Set([404, 429, 500, 503]);
 
 // deno-lint-ignore no-explicit-any
 async function askGemini(key: string, parts: any[], lowResolution = true, timeoutMs = 110_000, schema: unknown = AI_SCHEMA): Promise<Record<string, unknown>> {
-  const models = [...new Set([env('GEMINI_MODEL'), 'gemini-flash-latest', 'gemini-2.5-flash'].filter(Boolean))] as string[];
-  let lastError = '';
+  const models = [...new Set([env('GEMINI_MODEL'), ...GEMINI_MODELS].filter(Boolean))] as string[];
+  const failed: string[] = [];
   for (const model of models) {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
       method: 'POST',
@@ -627,10 +632,11 @@ async function askGemini(key: string, parts: any[], lowResolution = true, timeou
     }
     let detail = '';
     try { detail = (await res.json()).error?.message ?? ''; } catch { /* keine JSON-Antwort */ }
-    lastError = `Gemini: Fehler ${res.status}${detail ? ` (${detail})` : ''}`;
+    failed.push(`${model}: Fehler ${res.status}${detail ? ` (${detail})` : ''}`);
     if (!RETRY_STATUS.has(res.status)) break;
   }
-  throw new Error(lastError);
+  // Alle Modelle nennen, damit man in der Meldung sieht, was wirklich schiefgeht.
+  throw new Error(`Gemini — ${failed.join(' | ')}`);
 }
 
 export function normalizeAiRecipe(ai: Record<string, unknown>, maxSeconds: number | null, withTimes: boolean) {
