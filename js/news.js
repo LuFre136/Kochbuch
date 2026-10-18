@@ -5,6 +5,15 @@
 
 export const NEWS = [
   {
+    version: '2026-10-18-einladungen',
+    title: 'Einladungen gelten nur einmal',
+    lines: [
+      { text: 'Jeder Einladungslink für ein Rezept, dein Kochbuch oder eine Einkaufsliste gilt jetzt für genau eine Person. Sie tippt „Annehmen“ oder „Ablehnen“, danach ist der Link verbraucht.', ziel: '#/hilfe/teilen' },
+      { text: 'Einzelne Rezepte bekommt man nur noch mit Konto. Angenommene Rezepte stehen unter „Teilen“ → „Mit mir geteilte Rezepte“.', ziel: '#/geteilt' },
+      { text: 'Unter „Teilen“ siehst du offene Einladungen und kannst sie zurückziehen.', ziel: '#/geteilt' },
+    ],
+  },
+  {
     version: '2026-10-18-auge',
     title: 'Geteilte Kochbücher ausblenden',
     lines: [
