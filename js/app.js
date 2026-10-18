@@ -327,9 +327,130 @@ function renderNav() {
   // "+ Rezept" steht nur auf der Übersicht; Abmelden liegt unter "Verwalten".
   nav.innerHTML = `
     ${first ? '' : '<a class="btn primary small" href="#/neu">+ Rezept</a>'}
-    ${topic ? '<button class="icon-btn" id="help-btn" aria-label="Hilfe zu dieser Seite" title="Hilfe zu dieser Seite">?</button>' : ''}`;
+    ${topic ? '<button class="icon-btn" id="help-btn" aria-label="Hilfe zu dieser Seite" title="Hilfe zu dieser Seite">?</button>' : ''}
+    <button class="icon-btn bell" id="bell" hidden>${BELL}<span class="badge" hidden></span></button>`;
   const help = $('#help-btn', nav);
   if (help) help.onclick = () => openHelpSheet(topic);
+  $('#bell', nav).onclick = openNotifications;
+  drawBell();
+  watchNotifications();
+}
+
+// ---------- Benachrichtigungen (Glocke) ----------
+
+const BELL = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>';
+
+let notes = null; // eigene Benachrichtigungen; null = noch nicht geladen, false = benachrichtigungen.sql fehlt
+let notesFor = null; // für wen die Live-Aktualisierung läuft
+let noteChannel = null;
+
+async function loadNotifications() {
+  if (!session) return;
+  const { data, error } = await supabase.rpc('my_notifications');
+  notes = error ? false : data;
+  drawBell();
+}
+
+// Die Glocke zeigt, wie viele ungelesen sind.
+function drawBell() {
+  const bell = document.getElementById('bell');
+  if (!bell) return;
+  bell.hidden = !notes;
+  const unread = notes ? notes.filter((n) => !n.read_at).length : 0;
+  const badge = bell.querySelector('.badge');
+  badge.hidden = !unread;
+  badge.textContent = unread > 9 ? '9+' : String(unread);
+  const label = unread ? `Benachrichtigungen, ${unread} ungelesen` : 'Benachrichtigungen';
+  bell.setAttribute('aria-label', label);
+  bell.title = label;
+}
+
+// Lädt die Benachrichtigungen einmal pro Anmeldung und hält sie live aktuell.
+function watchNotifications() {
+  if (!session || notesFor === session.user.id) return;
+  notesFor = session.user.id;
+  if (noteChannel) supabase.removeChannel(noteChannel);
+  noteChannel = supabase.channel(`glocke-${notesFor}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${notesFor}` }, () => loadNotifications())
+    .subscribe();
+  loadNotifications();
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && session && notes !== false) loadNotifications();
+});
+
+// Text und Ziel einer Benachrichtigung.
+function noteContent(n) {
+  if (n.kind === 'invite_accepted') {
+    if (n.target_kind === 'recipe') return { text: `${n.actor_name} hat dein Rezept „${n.title ?? 'Rezept'}“ angenommen.`, href: `#/r/${n.target_id}` };
+    if (n.target_kind === 'list') return { text: `${n.actor_name} hat deine Einladung zur Einkaufsliste „${n.title ?? 'Einkaufsliste'}“ angenommen.`, href: `#/einkauf/${n.target_id}` };
+    return { text: `${n.actor_name} hat deine Einladung zu deinem Kochbuch angenommen.`, href: '#/geteilt' };
+  }
+  if (n.kind === 'share_back') {
+    return { text: `${n.actor_name} möchte das eigene Kochbuch mit dir teilen.`, href: '#/geteilt', offer: true };
+  }
+  return { text: `Neues von ${n.actor_name}.`, href: '#/geteilt' };
+}
+
+const OFFER_STATE = { angenommen: 'Angenommen', abgelehnt: 'Abgelehnt', zurueckgezogen: 'Zurückgezogen' };
+
+// Antwort auf ein Angebot aus der Glocke (Zurückteilen).
+async function answerOffer(inviteId, accept) {
+  const { data, error } = await supabase.rpc('respond_direct_invite', { p_id: inviteId, p_accept: accept });
+  if (error) { toast(error.message); return; }
+  await loadNotifications();
+  if (!accept) { toast('Abgelehnt'); return; }
+  cookbookCache.clear();
+  toast('Angenommen');
+  location.hash = `#/kochbuch/${data[0].owner_id}`;
+}
+
+function formatWhen(iso) {
+  const d = new Date(iso);
+  const min = Math.round((Date.now() - d) / 60000);
+  if (min < 1) return 'gerade eben';
+  if (min < 60) return `vor ${min} Min.`;
+  const time = d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  const days = Math.round((new Date(`${today()}T12:00:00`) - new Date(`${d.toLocaleDateString('sv-SE')}T12:00:00`)) / 86400000);
+  if (days <= 0) return `heute, ${time}`;
+  if (days === 1) return `gestern, ${time}`;
+  return d.toLocaleDateString('de-DE');
+}
+
+// Liste der Benachrichtigungen. Ungelesene sind hervorgehoben, solange das Blatt offen ist;
+// beim Schließen gelten alle als gelesen.
+async function openNotifications() {
+  const shown = notes || [];
+  const unread = shown.filter((n) => !n.read_at).map((n) => n.id);
+  const { value } = await openSheet(`<h2>Benachrichtigungen</h2>
+    ${shown.length ? `<ul class="notes">${shown.map((n) => {
+      const { text, href, offer } = noteContent(n);
+      if (offer) {
+        // Ein Angebot lässt sich hier direkt beantworten, genau einmal.
+        return `<li class="note offer${n.read_at ? '' : ' unread'}"><div class="note-btn">
+          <span>${esc(text)}</span><small>${esc(formatWhen(n.created_at))}</small>
+          ${n.invite_status === 'offen' ? `<div class="row">
+            <button class="btn small primary" value="annehmen:${n.invite_id}" formnovalidate>Annehmen</button>
+            <button class="btn small" value="ablehnen:${n.invite_id}" formnovalidate>Ablehnen</button></div>`
+    : `<small>${esc(OFFER_STATE[n.invite_status] ?? '')}</small>`}</div></li>`;
+      }
+      return `<li class="note${n.read_at ? '' : ' unread'}"><button class="note-btn" value="${esc(href)}" formnovalidate>
+        <span>${esc(text)}</span><small>${esc(formatWhen(n.created_at))}</small></button></li>`;
+    }).join('')}</ul>` : '<p class="hint">Keine Benachrichtigungen.</p>'}
+    <p class="hint">Gelesene verschwinden nach 7 Tagen.</p>
+    <div class="row"><button class="btn primary" value="ok">Schließen</button></div>`);
+  if (unread.length) {
+    const { error } = await supabase.rpc('mark_notifications_read', { p_ids: unread });
+    if (!error) {
+      const now = new Date().toISOString();
+      shown.forEach((n) => { if (!n.read_at) n.read_at = now; });
+      drawBell();
+    }
+  }
+  if (value.startsWith('#/')) location.hash = value;
+  const [answer, inviteId] = value.split(':');
+  if (inviteId && (answer === 'annehmen' || answer === 'ablehnen')) await answerOffer(inviteId, answer === 'annehmen');
 }
 
 // ---------- Benutzername ----------
@@ -3051,6 +3172,7 @@ async function renderInvite(token) {
     if (!accept) { notice('Einladung abgelehnt. Der Link ist damit verbraucht.'); return; }
     cookbookCache.clear();
     toast({ cookbook: 'Einladung angenommen', list: 'Du kannst die Liste jetzt mitbearbeiten', recipe: 'Rezept angenommen' }[r.kind]);
+    if (r.kind === 'cookbook') await askShareBack(r.owner_id, inv.owner_name);
     location.replace(inviteTarget(r.kind, r.target_id));
   };
   $('#accept').onclick = () => {
@@ -3060,6 +3182,20 @@ async function renderInvite(token) {
   $('#decline').onclick = () => {
     if (confirm('Einladung ablehnen? Der Link ist danach verbraucht.')) respond(false);
   };
+}
+
+// Nach einer angenommenen Kochbuch-Einladung: das eigene Kochbuch zurückteilen? Die andere
+// Person bekommt das Angebot in ihre Glocke und entscheidet dort.
+async function askShareBack(person, name) {
+  const { data: possible, error } = await supabase.rpc('share_back_possible', { p_person: person });
+  if (error || !possible) return; // zurueckteilen.sql fehlt, oder sie liest mein Kochbuch schon
+  const { value } = await openSheet(`<h2>Dein Kochbuch auch mit ${esc(name)} teilen?</h2>
+    <p>${esc(name)} bekommt das Angebot in die Glocke und kann es annehmen oder ablehnen. Familiengeheimnisse bleiben verborgen.</p>
+    <div class="row"><button class="btn primary" value="ja">Ja, teilen</button>
+      <button class="btn ghost" value="nein" formnovalidate>Nein</button></div>`);
+  if (value !== 'ja') return;
+  const { error: e } = await supabase.rpc('offer_share_back', { p_person: person });
+  toast(e ? e.message : `Angebot an ${name} geschickt`);
 }
 
 // Ein Rezept, das jemand einzeln mit mir geteilt hat.
@@ -3166,12 +3302,13 @@ async function openNewsSheet(entries) {
 async function renderSharing() {
   app.innerHTML = `<p class="loading">Lade …</p>`;
   const me = session.user.id;
-  const [own, people, shares, invites, lists] = await Promise.all([
+  const [own, people, shares, invites, lists, invitees] = await Promise.all([
     loadRecipes(),
     loadPeople(),
     loadRecipeShares().catch(() => null),
     supabase.from('invites').select('*').eq('owner_id', me).eq('status', 'offen').order('created_at'),
     supabase.from('shopping_lists').select('id, name').eq('owner_id', me),
+    supabase.rpc('invitee_names'),
   ]);
   const ready = shares !== null && !invites.error; // false, solange einladungen.sql fehlt
   const received = await loadReceived((shares ?? []).filter((x) => x.user_id === me));
@@ -3183,7 +3320,8 @@ async function renderSharing() {
   });
   const titleOf = (id) => own.find((r) => r.id === id)?.title ?? 'Gelöschtes Rezept';
   const listName = (id) => (lists.data ?? []).find((l) => l.id === id)?.name ?? 'Einkaufsliste';
-  const inviteLabel = (i) => ({ cookbook: 'Mein Kochbuch', recipe: `Rezept „${titleOf(i.recipe_id)}“`, list: `Einkaufsliste „${listName(i.list_id)}“` }[i.kind]);
+  const inviteeName = (i) => (invitees.data ?? []).find((x) => x.invite_id === i.id)?.name ?? 'jemanden';
+  const inviteLabel = (i) => ({ cookbook: i.invitee_id ? `Mein Kochbuch an ${inviteeName(i)}` : 'Mein Kochbuch', recipe: `Rezept „${titleOf(i.recipe_id)}“`, list: `Einkaufsliste „${listName(i.list_id)}“` }[i.kind]);
   const open = invites.data ?? [];
   const { readers, owners } = people;
 
@@ -3243,7 +3381,7 @@ async function renderSharing() {
       <p class="hint">Verschickt, aber noch nicht beantwortet. Sobald jemand annimmt oder ablehnt, verschwindet der Link hier.</p>
       <ul class="people">${open.map((i) => `<li>
           <span>${esc(inviteLabel(i))} <small class="hint">${esc(new Date(i.created_at).toLocaleDateString('de-DE'))}</small></span>
-          <span class="row-actions"><button class="link" data-resend="${i.id}">Link teilen</button>
+          <span class="row-actions">${i.token ? `<button class="link" data-resend="${i.id}">Link teilen</button>` : ''}
           <button class="link danger-link" data-withdraw="${i.id}">Zurückziehen</button></span>
         </li>`).join('')}</ul>
     </section>` : ''}`;
@@ -3619,7 +3757,7 @@ if (isConfigured) {
     const userChanged = newSession?.user?.id !== session?.user?.id;
     session = newSession;
     if (event === 'PASSWORD_RECOVERY') recoveringPassword = true;
-    if (userChanged) { recipes = null; myName = undefined; categories = null; places = null; cookbookCache.clear(); }
+    if (userChanged) { recipes = null; myName = undefined; categories = null; places = null; notes = null; notesFor = null; cookbookCache.clear(); }
     // Nur bei echten Wechseln neu zeichnen, nicht beim stillen Token-Refresh.
     if (userChanged || event === 'PASSWORD_RECOVERY' || event === 'SIGNED_OUT') setTimeout(render);
   });

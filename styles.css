@@ -612,3 +612,24 @@ dialog.sheet.full {
 .given-people { list-style: none; padding: 4px 0 0 12px; margin: 0; }
 .given-people li { padding: 4px 0; border: 0; }
 .row-actions { display: flex; gap: 12px; flex: none; }
+
+/* Glocke mit Benachrichtigungen */
+.bell { position: relative; display: inline-grid; place-items: center; color: var(--text); }
+.bell[hidden] { display: none; }
+.bell .badge {
+  position: absolute; top: 3px; right: 2px; min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: 9px; background: var(--danger); color: #fff; font-size: 0.7rem; font-weight: 700;
+  line-height: 18px; text-align: center;
+}
+.notes { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.note-btn {
+  display: grid; gap: 2px; width: 100%; text-align: left; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; cursor: pointer;
+}
+.note-btn small { color: var(--muted); font-size: 0.8rem; }
+.note.unread .note-btn { background: var(--surface-2); border-color: var(--accent); font-weight: 600; }
+.note.unread .note-btn span::before { content: ''; display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--accent); vertical-align: middle; }
+.note.offer .note-btn { cursor: default; }
+.note.offer .row { margin-top: 6px; }
+.note.offer .note-btn { cursor: default; }
+.note.offer .row { margin-top: 6px; }
