@@ -243,8 +243,13 @@ ul.hint { margin: 8px 0 0; padding-left: 1.2rem; }
 }
 .qty { font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
 .parse-preview { margin-top: -6px; font-size: 0.9rem; color: var(--muted); }
-.parse-preview li { padding: 4px 0; grid-template-columns: 6.5rem 1fr auto; align-items: center; }
-.cat-select { max-width: 9.5rem; padding: 2px 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--muted); font: inherit; font-size: 0.8rem; }
+.parse-preview li { display: block; padding: 0; border-radius: 0; }
+.parse-preview .ing-row { display: grid; grid-template-columns: 6.5rem 1fr; gap: 12px; align-items: center; padding: 6px 0; background: var(--bg); }
+.swipe > .ing-row { position: relative; z-index: 1; touch-action: pan-y; user-select: none; }
+.ing-info { display: block; margin-top: 1px; font-size: 0.8rem; color: var(--muted); }
+.ing-info .sym { margin-right: 2px; }
+.parse-preview:empty + .preview-hint { display: none; }
+.preview-hint { margin: -4px 0 0; font-size: 0.8rem; }
 .ing-note { color: var(--muted); font-size: 0.85em; }
 .ing-note::before { content: '· '; }
 .parse-preview:empty { display: none; }
@@ -594,8 +599,19 @@ dialog.sheet.full {
 .notice-inline { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); border-left: 3px solid var(--danger); }
 
 /* Familiengeheimnis */
-.secret-check { color: var(--text); font-size: 1rem; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; }
-.secret-check small { display: block; color: var(--muted); font-size: 0.85rem; margin-top: 2px; }
+/* Familiengeheimnis: Schloss statt Häkchen. Die Checkbox bleibt für Formular und Tastatur da, ist aber unsichtbar. */
+.lock-toggle { position: relative; display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; font-weight: 400; color: var(--text); cursor: pointer; }
+.lock-toggle input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; pointer-events: none; }
+.lock-toggle strong { display: block; font-size: 1rem; }
+.lock-toggle small { color: var(--muted); font-size: 0.85rem; }
+.lock-icon { display: grid; place-items: center; flex: none; width: 44px; height: 44px; border-radius: 50%; background: var(--surface-2); color: var(--muted); transition: background 0.15s, color 0.15s; }
+.lock-icon .sym { width: 24px; height: 24px; margin: 0; }
+.lock-toggle .locked, .lock-toggle .when-on { display: none; }
+.lock-toggle input:checked ~ .lock-icon { background: var(--accent); color: var(--accent-text); }
+.lock-toggle input:checked ~ .lock-icon .locked, .lock-toggle input:checked ~ span .when-on { display: block; }
+.lock-toggle input:checked ~ .lock-icon .unlocked, .lock-toggle input:checked ~ span .when-off { display: none; }
+.lock-toggle:has(input:checked) { border-color: var(--accent); }
+.lock-toggle input:focus-visible ~ .lock-icon { outline: 2px solid var(--accent); outline-offset: 2px; }
 .secret-mark { color: var(--accent); margin-right: 0.3em; }
 .secret-mark .sym { margin: 0; }
 .secret-hint { margin: 4px 0 0; }
@@ -656,5 +672,17 @@ dialog.sheet.full {
 .meta .sym, .meta .rating { color: var(--accent); }
 .meta .sym { margin-right: 4px; }
 .btn .sym { margin-right: 6px; }
-.secret-check .sym { color: var(--accent); }
 .meta .sym.filled { margin-right: 1px; }
+
+/* Verwalten: Zutaten und Orte */
+.ing-group { font-size: 0.95rem; margin: 18px 0 2px; color: var(--muted); }
+.ing-list li { padding: 0; }
+.ing-item { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; width: 100%; padding: 10px 0; border: 0; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.ing-item small { color: var(--muted); font-size: 0.8rem; text-align: right; }
+.ing-item small .sym { margin-right: 2px; }
+#ing-q { margin: 12px 0 0; }
+.place-list li .row { flex-wrap: nowrap; flex: none; }
+.place-list .btn.small { min-width: 40px; padding: 0 10px; }
+.place-name { flex: 1; min-width: 0; padding: 4px 0; border: 0; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.sheet-form select { display: block; width: 100%; min-height: 44px; margin-top: 4px; padding: 0 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
+.place-list + #add-place { margin-top: 12px; }

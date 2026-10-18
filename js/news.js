@@ -5,6 +5,15 @@
 
 export const NEWS = [
   {
+    version: '2026-10-18-zutaten-orte',
+    title: 'Zutaten und Orte verwalten',
+    lines: [
+      { text: 'Unter „Verwalten“ gibt es jetzt „Zutaten“: alle Zutaten mit Kategorie und Einkaufsorten, zum Ändern und zum Erfassen neuer Zutaten.', ziel: '#/zutaten' },
+      { text: 'Die Einkaufsorte verwaltest du unter „Verwalten“ → „Orte“ und kannst sie dort auch sortieren.', ziel: '#/orte' },
+      { text: 'Beim Bearbeiten eines Rezepts wischst du eine Zutat zur Seite, um Kategorie und Orte zu ändern.' },
+    ],
+  },
+  {
     version: '2026-10-18-zurueckteilen',
     title: 'Kochbuch zurückteilen',
     lines: [
