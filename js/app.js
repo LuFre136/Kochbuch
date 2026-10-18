@@ -11,7 +11,7 @@ import { CATEGORIES, guessCategory, categoryKey, categoryRank } from './categori
 import { DEFAULT_PLACES, guessPlaces } from './places.js';
 import { linkify } from './links.js';
 import {
-  videoOf, videosOf, videoKey, embedUrl, seekTo, askPlayerState, isPlayerMessage, stepText, stepTime, stepVideo,
+  videoOf, videosOf, videoKey, embedUrl, seekTo, askPlayerState, pausePlayer, isPlayerMessage, stepText, stepTime, stepVideo,
   dropMissingTimes, makeStep, formatTime,
 } from './video.js';
 import {
@@ -869,15 +869,15 @@ function enableRecipeSwipe(el, go) {
   el.addEventListener('pointercancel', stop);
 }
 
-// Ob der Player oben auf Befehle reagiert. Er meldet sich, nachdem er darum gebeten wurde
-// (askPlayerState); dann nimmt er auch ein seekTo an und spielt ab der Stelle, selbst wenn
-// er noch nicht gestartet wurde. Meldet er sich nicht, wird für einen Zeitstempel mit der
-// Startzeit neu geladen.
-let playerReady = false;
+// Ein Player, der sich gemeldet hat (nach askPlayerState), nimmt Befehle an: dann spielt
+// ein Zeitstempel das Video ab der Stelle, ohne es neu zu laden. Wer sich gemeldet hat,
+// steht am iframe selbst — oben im Rezept stehen alle Videos gleichzeitig, jedes mit
+// eigenem Player.
 window.addEventListener('message', (e) => {
-  const frame = document.querySelector('#video');
-  if (!frame || e.source !== frame.contentWindow) return;
-  if (isPlayerMessage(e.data)) playerReady = true;
+  if (!isPlayerMessage(e.data)) return;
+  for (const frame of document.querySelectorAll('#media-box iframe[data-video]')) {
+    if (e.source === frame.contentWindow) { frame.dataset.ready = '1'; return; }
+  }
 });
 
 // Einmaliger Hinweis, dass zwischen den Alternativen gewischt werden kann. Er geht weg,
@@ -966,10 +966,14 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
       <button type="button" class="icon-btn" data-img="-1" aria-label="Vorheriges Bild">‹</button>
       <span id="gallery-at" aria-live="polite">1 / ${r.images.length}</span>
       <button type="button" class="icon-btn" data-img="1" aria-label="Nächstes Bild">›</button></div>` : ''}`;
-  const videoHtml = (v, start = null) => `<div class="video${v.vertical ? ' vertical' : ''}">
-    <iframe id="video" src="${esc(embedUrl(v, location.origin, start))}" title="Video zum Rezept"
+  const videoHtml = (v) => `<div class="video${v.vertical ? ' vertical' : ''}">
+    <iframe data-video="${esc(v.key)}" src="${esc(embedUrl(v, location.origin))}" title="Video zum Rezept"
       allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`;
-  const mediaHtml = (t, start = null) => (t.video ? videoHtml(t.video, start) : galleryHtml());
+  // Alle Videos und die Bilder stehen gleichzeitig im Kasten, sichtbar ist immer nur eines.
+  // So bleibt jeder Player geladen: ein Zeitstempel kann ihn direkt anspringen und starten,
+  // und beim Wechseln geht die Stelle im anderen Video nicht verloren.
+  const mediaHtml = () => tabs.map((t, i) => `<div class="media-panel" data-panel="${esc(t.key)}"${i ? ' hidden' : ''}>
+    ${t.video ? videoHtml(t.video) : galleryHtml()}</div>`).join('');
   // Alternativen liegen als Kartenstapel hinter der aktuellen Karte: in die Richtungen,
   // in die auch gewischt werden kann.
   const prev = index > 0 ? group[index - 1] : null;
@@ -981,7 +985,7 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
       ${from ? `<p class="hint from">${esc(from)}</p>` : ''}
       ${shown ? `${tabs.length > 1 ? `<div class="media-tabs" id="media-tabs" role="tablist">${tabs.map((t, i) => `<button type="button" class="chip${i === 0 ? ' active' : ''}"
         data-media="${esc(t.key)}" role="tab" aria-selected="${i === 0}">${esc(t.label)}</button>`).join('')}</div>` : ''}
-      <div class="media" id="media-box">${mediaHtml(shown)}</div>` : ''}
+      <div class="media" id="media-box">${mediaHtml()}</div>` : ''}
       <div class="stack${prev ? ' has-prev' : ''}${next ? ' has-next' : ''}">
         ${prev ? `<button type="button" class="stack-edge prev" data-alt="${index - 1}" aria-label="Zurück zu „${esc(prev.title)}“"><span>‹</span></button>` : ''}
         ${next ? `<button type="button" class="stack-edge next" data-alt="${index + 1}" aria-label="Weiter zu „${esc(next.title)}“"><span>›</span></button>` : ''}
@@ -1105,58 +1109,67 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
   };
   bindGallery();
 
-  // Bittet den geladenen Player, sich zu melden, und springt an die gewünschte Stelle:
-  // TikTok kennt keine Startzeit in der Adresse, und bei YouTube hilft der Befehl, wenn die
-  // Wiedergabe trotz autoplay nicht von selbst anläuft.
-  const watchPlayer = (entry, seconds = null) => {
-    const frame = $('#video');
-    if (!frame || !entry?.video) return;
+  const frames = () => [...app.querySelectorAll('#media-box iframe[data-video]')];
+  const frameOf = (key) => frames().find((f) => f.dataset.video === key);
+
+  // Bittet den Player, sich zu melden, und springt an die gewünschte Stelle: TikTok kennt
+  // keine Startzeit in der Adresse, und bei YouTube hilft der Befehl, wenn die Wiedergabe
+  // trotz autoplay nicht von selbst anläuft.
+  const watchPlayer = (frame, video, seconds = null) => {
+    if (!frame || !video) return;
     frame.addEventListener('load', () => {
       // Die Bitte wird wiederholt, bis sich der Player meldet: direkt nach dem Laden ist
       // sein Innenleben manchmal noch nicht bereit, und dann geht die erste verloren.
       let tries = 0;
       const ask = () => {
-        if (playerReady || tries >= 12 || $('#video') !== frame) return;
+        if (frame.dataset.ready || tries >= 12 || !frame.isConnected) return;
         tries += 1;
-        askPlayerState(frame, entry.video);
+        askPlayerState(frame, video);
         setTimeout(ask, 250);
       };
       ask();
-      // Nach dem Laden mit Startzeit noch einmal anspringen, falls autoplay nichts tut.
       if (seconds != null) {
-        seekTo(frame, entry.video, seconds);
-        setTimeout(() => { if ($('#video') === frame) seekTo(frame, entry.video, seconds); }, 700);
+        seekTo(frame, video, seconds);
+        setTimeout(() => { if (frame.isConnected) seekTo(frame, video, seconds); }, 700);
       }
     }, { once: true });
   };
-  if (shown?.video) watchPlayer(shown);
+  // Der sichtbare Player trägt #video (siehe showMedia), beim Öffnen also der erste.
+  if (shown?.video) frameOf(shown.key).id = 'video';
+  // Beim Öffnen melden sich alle Player, damit später jeder Zeitstempel sofort wirkt.
+  tabs.filter((t) => t.video).forEach((t) => watchPlayer(frameOf(t.key), t.video));
 
-  // Zeigt ein Video oder die Bilder. Reagiert der Player, springt er an die Stelle und
-  // spielt von dort; sonst wird das Video mit der Startzeit neu geladen.
-  const mountMedia = (entry, seconds = null) => {
-    playerReady = false;
-    const box = $('#media-box');
-    box.innerHTML = mediaHtml(entry, seconds);
-    if (!entry.video) { bindGallery(); return; }
-    watchPlayer(entry, seconds);
+  // Hat sich ein Player nie gemeldet, bleibt nur: mit der Startzeit neu laden.
+  const reloadAt = (entry, seconds) => {
+    const frame = frameOf(entry.key);
+    if (!frame) return;
+    delete frame.dataset.ready;
+    watchPlayer(frame, entry.video, seconds);
+    frame.src = embedUrl(entry.video, location.origin, seconds);
   };
+
+  // Zeigt ein Video oder die Bilder. Der sichtbare Player trägt die Kennung #video, damit
+  // es weiterhin genau einen gibt, der gemeint ist.
   const showMedia = (key, seconds = null) => {
     const box = $('#media-box');
     const next = tabs.find((t) => t.key === key);
     if (!box || !next) return;
     box.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    const same = next.key === shown.key;
-    if (same && (!next.video || seconds == null)) return;
-    // Meldet sich der Player, reicht ein Sprung: die Wiedergabe startet an der Stelle, und
-    // ein laufendes Video bricht nicht ab.
-    if (same && playerReady) { seekTo($('#video'), next.video, seconds); return; }
-    shown = next;
-    mountMedia(next, seconds);
-    app.querySelectorAll('#media-tabs [data-media]').forEach((t) => {
-      const on = t.dataset.media === next.key;
-      t.classList.toggle('active', on);
-      t.setAttribute('aria-selected', String(on));
-    });
+    if (next.key !== shown.key) {
+      if (shown.video) pausePlayer(frameOf(shown.key), shown.video);
+      app.querySelectorAll('#media-box [data-panel]').forEach((p) => { p.hidden = p.dataset.panel !== next.key; });
+      frames().forEach((f) => { if (f.dataset.video === next.key) f.id = 'video'; else f.removeAttribute('id'); });
+      shown = next;
+      app.querySelectorAll('#media-tabs [data-media]').forEach((t) => {
+        const on = t.dataset.media === next.key;
+        t.classList.toggle('active', on);
+        t.setAttribute('aria-selected', String(on));
+      });
+    }
+    if (!next.video || seconds == null) return;
+    const frame = frameOf(next.key);
+    if (frame?.dataset.ready) seekTo(frame, next.video, seconds);
+    else reloadAt(next, seconds);
   };
 
   app.querySelectorAll('#media-tabs [data-media]').forEach((t) => {

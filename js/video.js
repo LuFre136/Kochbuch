@@ -85,6 +85,18 @@ export function askPlayerState(iframe, video) {
   }
 }
 
+// Hält den Player an — beim Wechsel zu einem anderen Video, damit im Verborgenen nichts
+// weiterläuft. Die Stelle bleibt erhalten, der Player muss nicht neu geladen werden.
+export function pausePlayer(iframe, video) {
+  const win = iframe?.contentWindow;
+  if (!win) return;
+  if (video.provider === 'youtube') {
+    win.postMessage(JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }), '*');
+  } else {
+    win.postMessage({ type: 'pause', 'x-tiktok-player': true }, '*');
+  }
+}
+
 // Erkennt eine Nachricht des eingebetteten Players. Meldet er sich (nach askPlayerState),
 // nimmt er auch Befehle an — dann genügt für einen Zeitstempel ein seekTo, selbst wenn das
 // Video noch nicht gestartet wurde. Andere Fenster schicken auch Nachrichten, deshalb

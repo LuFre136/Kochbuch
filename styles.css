@@ -214,6 +214,8 @@ ul.hint { margin: 8px 0 0; padding-left: 1.2rem; }
 /* Medien oben im Rezept: eine Leiste, darunter das Video oder die Bilder */
 .media-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .media { margin-bottom: 12px; scroll-margin-top: 72px; }
+/* Alle Videos und die Bilder liegen gleichzeitig im Kasten; sichtbar ist nur eines. */
+.media-panel[hidden] { display: none; }
 .gallery-nav { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 6px; color: var(--muted); font-size: 0.875rem; }
 .video { margin: 0; scroll-margin-top: 72px; }
 .video iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: var(--radius); background: #000; }
