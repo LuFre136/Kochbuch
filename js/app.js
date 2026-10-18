@@ -981,9 +981,10 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
   const mediaHtml = () => tabs.map((t, i) => `<div class="media-panel" data-panel="${esc(t.key)}"${i ? ' hidden' : ''}>
     ${t.video ? videoHtml(t.video) : galleryHtml()}</div>`).join('');
   // Videos und Bilder stehen nach den Zutaten, über der Überschrift Zubereitung.
-  const mediaBlock = shown ? `${tabs.length > 1 ? `<div class="media-tabs" id="media-tabs" role="tablist">${tabs.map((t, i) => `<button type="button" class="chip${i === 0 ? ' active' : ''}"
+  const mediaBlock = shown ? `<div class="media-block">
+    ${tabs.length > 1 ? `<div class="media-tabs" id="media-tabs" role="tablist">${tabs.map((t, i) => `<button type="button" class="chip${i === 0 ? ' active' : ''}"
       data-media="${esc(t.key)}" role="tab" aria-selected="${i === 0}">${esc(t.label)}</button>`).join('')}</div>` : ''}
-    <div class="media" id="media-box">${mediaHtml()}</div>` : '';
+    <div class="media" id="media-box">${mediaHtml()}</div></div>` : '';
 
   // Alternativen liegen als Kartenstapel hinter der aktuellen Karte: in die Richtungen,
   // in die auch gewischt werden kann.

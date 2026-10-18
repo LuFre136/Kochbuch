@@ -212,7 +212,8 @@ ul.hint { margin: 8px 0 0; padding-left: 1.2rem; }
 }
 .gallery img:only-child { width: 100%; }
 /* Medien oben im Rezept: eine Leiste, darunter das Video oder die Bilder */
-.media-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.media-block { margin-top: 24px; }                     /* so viel Luft wie zwischen den Abschnitten */
+.media-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
 .media { margin-bottom: 12px; scroll-margin-top: 72px; }
 /* Alle Videos und die Bilder liegen gleichzeitig im Kasten; sichtbar ist nur eines. */
 .media-panel[hidden] { display: none; }
