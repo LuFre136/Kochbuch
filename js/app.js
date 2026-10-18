@@ -683,6 +683,22 @@ const TABS = [
   ['manage', '#/verwalten', 'Verwalten'],
 ];
 
+// Kleine Symbole im Strich der Leiste unten, statt Emojis. Sie erben Farbe und Größe vom
+// umgebenden Text; auf den Karten färbt das CSS sie im Orangeton.
+const SYMBOLS = {
+  lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 8 0V11"/>',
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  cooked: '<circle cx="12" cy="12.5" r="5"/><path d="M3 4v4.5a1.5 1.5 0 0 0 3 0V4M4.5 10v10M21 4c-1.6.8-2.5 3-2.5 6.5H21V20"/>',
+  pot: '<path d="M4 10h16v5.5a4.5 4.5 0 0 1-4.5 4.5h-7A4.5 4.5 0 0 1 4 15.5V10z"/><path d="M2 10h2M20 10h2M9.5 7c0-1.2 1.2-1.6 1.2-3M14 7c0-1.2 1.2-1.6 1.2-3"/>',
+  pin: '<path d="M12 21s-6.5-5.6-6.5-10.8a6.5 6.5 0 0 1 13 0C18.5 15.4 12 21 12 21z"/><circle cx="12" cy="10.2" r="2.3"/>',
+  camera: '<path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9.5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/>',
+  video: '<rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10.5 5-3v9l-5-3"/>',
+  text: '<path d="M6 3h8.5L19 7.5V21H6z"/><path d="M14 3v5h5M9 12.5h7M9 16.5h5"/>',
+  star: '<path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/>',
+};
+const symbol = (name, cls = 'sym') => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${SYMBOLS[name]}</svg>`;
+const PLACEHOLDER = `<div class="placeholder" aria-hidden="true">${symbol('pot')}</div>`;
+
 function renderTabbar(first) {
   if (!session) { tabbar.hidden = true; return; }
   const active = { '': 'list', r: 'list', neu: 'list', kombinieren: 'list', kochen: 'pantry', saison: 'pantry', plan: 'plan', einkauf: 'shop', verwalten: 'manage', geteilt: 'manage', kochbuch: 'manage', hilfe: 'manage', liste: 'shop' }[first || ''];
@@ -806,7 +822,7 @@ async function renderPantry() {
       ? `Es fehlt: ${m.map(esc).join(', ')}`
       : `Es fehlen ${m.length} Zutaten: ${m.slice(0, 3).map(esc).join(', ')} …`);
     const card = (h) => `<a class="suggestion${altStack(h.recipe)}" href="${recipeHref(h.recipe)}">
-      ${h.recipe.images[0] ? `<img src="${esc(imageUrl(h.recipe.images[0]))}" alt="" loading="lazy">` : '<div class="placeholder" aria-hidden="true">🍲</div>'}
+      ${h.recipe.images[0] ? `<img src="${esc(imageUrl(h.recipe.images[0]))}" alt="" loading="lazy">` : PLACEHOLDER}
       <div><h3>${esc(h.recipe.title)}${altMark(h.recipe, byId)}</h3>${fromLine(h.recipe)}
       <p class="${h.missing.length ? 'missing' : 'ok'}">${h.missing.length ? missingText(h.missing) : `Alle ${h.total} Zutaten da`}</p></div>
     </a>`;
@@ -922,7 +938,7 @@ async function renderSeason() {
     const found = seasonalRecipes(all, produce);
     const hits = tagFilter($('#season-tags'), found.map((h) => h.recipe), st.tags, draw)(found);
     $('#season-results').innerHTML = hits.length ? `<div class="suggestions">${hits.map((h) => `<a class="suggestion${altStack(h.recipe)}" href="${recipeHref(h.recipe)}">
-      ${h.recipe.images[0] ? `<img src="${esc(imageUrl(h.recipe.images[0]))}" alt="" loading="lazy">` : '<div class="placeholder" aria-hidden="true">🍲</div>'}
+      ${h.recipe.images[0] ? `<img src="${esc(imageUrl(h.recipe.images[0]))}" alt="" loading="lazy">` : PLACEHOLDER}
       <div><h3>${esc(h.recipe.title)}${altMark(h.recipe, byId)}</h3>${fromLine(h.recipe)}<p class="ok">Saison: ${h.matches.map((p) => esc(p.name)).join(', ')}</p></div></a>`).join('')}</div>`
       : `<p class="hint">${all.length ? 'Keines deiner Rezepte passt dazu.' : 'Du hast noch keine Rezepte.'}</p>`;
   };
@@ -1144,10 +1160,13 @@ const altStack = (r) => (links && alternativeIds(links, r.id).length ? ' stacked
 function recipeCard(r, href = `#/r/${r.id}`, byId = null) {
   const img = r.images[0]
     ? `<img src="${esc(imageUrl(r.images[0]))}" alt="" loading="lazy">`
-    : '<div class="placeholder" aria-hidden="true">🍲</div>';
-  const cooked = r.last_cooked ? `🍽 gekocht ${formatCooked(r.last_cooked, today())}` : '';
-  const meta = [r.rating ? '★'.repeat(r.rating) : '', r.total_minutes != null ? `⏱ ${formatMinutes(r.total_minutes)}` : '', cooked, ...r.tags.slice(0, 2)]
-    .filter(Boolean).map((m) => `<span>${esc(m)}</span>`).join('');
+    : PLACEHOLDER;
+  const meta = [
+    r.rating ? `<span class="rating" aria-label="${r.rating} von 5 Sternen">${symbol('star', 'sym filled').repeat(r.rating)}</span>` : '',
+    r.total_minutes != null ? `<span>${symbol('clock')}${esc(formatMinutes(r.total_minutes))}</span>` : '',
+    r.last_cooked ? `<span>${symbol('cooked')}gekocht ${esc(formatCooked(r.last_cooked, today()))}</span>` : '',
+    ...r.tags.slice(0, 2).map((t) => `<span>${esc(t)}</span>`),
+  ].join('');
   return `<a class="card${altStack(r)}" href="${href}">
     ${img}
     <div class="card-body"><h2>${secretMark(r)}${esc(r.title)}${altMark(r, byId)}</h2><div class="meta">${meta}</div></div>
@@ -1156,7 +1175,7 @@ function recipeCard(r, href = `#/r/${r.id}`, byId = null) {
 
 // Schloss vor dem Titel eines Familiengeheimnisses. Leser fremder Kochbücher bekommen
 // solche Rezepte gar nicht erst; sieht man eines, ist es eigenes oder einzeln geschickt.
-const secretMark = (r) => (r.family_secret ? '<span class="secret-mark" title="Familiengeheimnis" aria-label="Familiengeheimnis">🔒</span> ' : '');
+const secretMark = (r) => (r.family_secret ? `<span class="secret-mark" title="Familiengeheimnis" aria-label="Familiengeheimnis">${symbol('lock')}</span>` : '');
 
 // Zeigt ein eigenes Rezept. altId: die gerade angezeigte Alternative des Rezepts id.
 async function renderDetail(id, altId = null) {
@@ -2033,9 +2052,9 @@ async function renderEditor(id) {
         </label>
         <div class="import-more">
           <div class="import-buttons">
-            <label class="btn" id="import-photo-btn">📷 Aus Fotos<input type="file" id="import-photos" accept="image/*" multiple hidden></label>
-            <label class="btn" id="import-video-btn">🎬 Aus Video<input type="file" id="import-video" accept="video/*" hidden></label>
-            <button type="button" class="btn" id="import-text-btn">📝 Text einfügen</button>
+            <label class="btn" id="import-photo-btn">${symbol('camera')}Aus Fotos<input type="file" id="import-photos" accept="image/*" multiple hidden></label>
+            <label class="btn" id="import-video-btn">${symbol('video')}Aus Video<input type="file" id="import-video" accept="video/*" hidden></label>
+            <button type="button" class="btn" id="import-text-btn">${symbol('text')}Text einfügen</button>
           </div>
           <small><b>Fotos:</b> Kochbuchseite oder Rezeptkarte, gedruckt oder handschriftlich (bis zu 6).
             <b>Video:</b> ein gespeichertes TikTok oder Reel, wenn das Rezept nur im Video gesprochen oder eingeblendet wird (bis 50 MB).
@@ -2056,7 +2075,7 @@ async function renderEditor(id) {
         <datalist id="known-tags">${knownTags.map((t) => `<option value="${esc(t)}">`).join('')}</datalist>
       </fieldset>
       ${secretColumn ? `<label class="check secret-check"><input type="checkbox" name="family_secret"${r.family_secret ? ' checked' : ''}>
-        <span>🔒 Familiengeheimnis<small>Nur für dich und für Personen, denen du das Rezept einzeln schickst. Wer dein Kochbuch liest, sieht es nicht.</small></span></label>` : ''}
+        <span>${symbol('lock')}Familiengeheimnis<small>Nur für dich und für Personen, denen du das Rezept einzeln schickst. Wer dein Kochbuch liest, sieht es nicht.</small></span></label>` : ''}
 
       <div class="cols">
         <label>Anzahl Portionen <input name="servings" type="number" min="1" max="100" required value="${r.servings}"></label>
@@ -2118,7 +2137,7 @@ async function renderEditor(id) {
     const items = parseIngredientText(form.ingredients.value);
     // Je Zutat Kategorie und Einkaufsorte; eine Änderung gilt für diese Zutat in allen Rezepten und Einkaufslisten.
     preview.innerHTML = items.map((i, n) => `<li><span class="qty">${esc(formatQuantity(i)) || '–'}</span><span>${ingredientLabel(i)}
-      ${i.name ? `<button type="button" class="link place-link" data-place="${n}" aria-label="Orte von ${esc(i.name)} ändern">📍&nbsp;${esc(placeLabel(placesOf(i.name)))}</button>` : ''}</span>
+      ${i.name ? `<button type="button" class="link place-link" data-place="${n}" aria-label="Orte von ${esc(i.name)} ändern">${symbol('pin')}${esc(placeLabel(placesOf(i.name)))}</button>` : ''}</span>
       ${i.name ? `<select class="cat-select" data-cat="${n}" aria-label="Kategorie von ${esc(i.name)}">${categoryOptions(categoryOf(i.name))}</select>` : ''}</li>`).join('');
     preview.querySelectorAll('[data-cat]').forEach((sel) => {
       sel.onchange = () => setCategory(items[Number(sel.dataset.cat)].name, sel.value);
@@ -2497,7 +2516,7 @@ async function renderPlan() {
       <div class="suggestions">${entries.filter((p) => p.planned_for === day).map((p) => {
     const r = byId.get(p.recipe_id);
     return `<div class="suggestion plan-entry${altStack(r)}" data-id="${p.id}">
-          ${r.images[0] ? `<img src="${esc(imageUrl(r.images[0]))}" alt="" loading="lazy">` : '<div class="placeholder" aria-hidden="true">🍲</div>'}
+          ${r.images[0] ? `<img src="${esc(imageUrl(r.images[0]))}" alt="" loading="lazy">` : PLACEHOLDER}
           <div><h3><a href="#/r/${r.id}">${esc(r.title)}</a>${altMark(r, byId)}</h3>
             <p class="missing">${p.servings} ${p.servings === 1 ? 'Portion' : 'Portionen'}${onLists.has(p.id) ? ' · <span class="on-list">✓ auf der Einkaufsliste</span>' : ''}</p>
             <div class="entry-actions">
