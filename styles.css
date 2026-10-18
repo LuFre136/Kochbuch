@@ -585,3 +585,8 @@ dialog.sheet.full {
 .manage-item { text-align: left; font: inherit; cursor: pointer; }
 .news-entry h3 { margin: 14px 0 0; }
 .news-entry .help-lines .btn { margin-top: 6px; }
+
+/* Benutzername: frei oder vergeben, schon beim Tippen */
+.name-check.taken { color: var(--danger); }
+.name-check.free { color: var(--accent); }
+.notice-inline { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); border-left: 3px solid var(--danger); }
