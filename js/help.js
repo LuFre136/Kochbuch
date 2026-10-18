@@ -110,6 +110,7 @@ export const HELP = [
       'Wer die Einladung zu deinem Kochbuch annimmt, kann alle deine Rezepte ansehen und übernehmen, aber nichts ändern. Lesezugriff kannst du einzeln entfernen.',
       'Ein einzelnes Rezept schickst du im Rezept selbst über „Teilen“. Wer annimmt, findet es unter „Mit mir geteilte Rezepte“; dafür braucht man ein Konto.',
       'Unter „Offene Einladungen“ siehst du verschickte Links, die noch niemand beantwortet hat, und kannst sie zurückziehen.',
+      'Die Glocke oben rechts meldet, wenn jemand deine Einladung angenommen hat. Ungelesenes ist hervorgehoben; Gelesenes verschwindet nach 7 Tagen.',
       'Familiengeheimnis: Setzt du beim Bearbeiten eines Rezepts das Häkchen „Familiengeheimnis“, sehen es Leser deines Kochbuchs nicht. Wem du das Rezept einzeln schickst, der sieht es trotzdem.',
       'Dein Benutzername ist das, was andere von dir sehen; du kannst ihn hier ändern. Jeden Namen gibt es nur einmal, Groß- und Kleinschreibung zählt dabei nicht. Schon beim Tippen siehst du, ob er noch frei ist.',
       'Kochbücher, die andere mit dir geteilt haben, stehen oben auf dieser Seite und lassen sich wieder verlassen. Das Auge dahinter blendet ein Kochbuch aus: Es erscheint dann nicht mehr bei „Was kochen?“, in der Saison und beim Kombinieren, bleibt aber hier zum Öffnen stehen.',

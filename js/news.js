@@ -5,6 +5,13 @@
 
 export const NEWS = [
   {
+    version: '2026-10-18-glocke',
+    title: 'Glocke oben rechts',
+    lines: [
+      { text: 'Die Glocke meldet, wenn jemand deine Einladung zu einem Rezept, deinem Kochbuch oder einer Einkaufsliste angenommen hat. Die Zahl zeigt, wie viel ungelesen ist; Gelesenes bleibt 7 Tage stehen.' },
+    ],
+  },
+  {
     version: '2026-10-18-einladungen',
     title: 'Einladungen gelten nur einmal',
     lines: [

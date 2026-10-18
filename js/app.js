@@ -327,9 +327,103 @@ function renderNav() {
   // "+ Rezept" steht nur auf der Übersicht; Abmelden liegt unter "Verwalten".
   nav.innerHTML = `
     ${first ? '' : '<a class="btn primary small" href="#/neu">+ Rezept</a>'}
-    ${topic ? '<button class="icon-btn" id="help-btn" aria-label="Hilfe zu dieser Seite" title="Hilfe zu dieser Seite">?</button>' : ''}`;
+    ${topic ? '<button class="icon-btn" id="help-btn" aria-label="Hilfe zu dieser Seite" title="Hilfe zu dieser Seite">?</button>' : ''}
+    <button class="icon-btn bell" id="bell" hidden>${BELL}<span class="badge" hidden></span></button>`;
   const help = $('#help-btn', nav);
   if (help) help.onclick = () => openHelpSheet(topic);
+  $('#bell', nav).onclick = openNotifications;
+  drawBell();
+  watchNotifications();
+}
+
+// ---------- Benachrichtigungen (Glocke) ----------
+
+const BELL = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>';
+
+let notes = null; // eigene Benachrichtigungen; null = noch nicht geladen, false = benachrichtigungen.sql fehlt
+let notesFor = null; // für wen die Live-Aktualisierung läuft
+let noteChannel = null;
+
+async function loadNotifications() {
+  if (!session) return;
+  const { data, error } = await supabase.rpc('my_notifications');
+  notes = error ? false : data;
+  drawBell();
+}
+
+// Die Glocke zeigt, wie viele ungelesen sind.
+function drawBell() {
+  const bell = document.getElementById('bell');
+  if (!bell) return;
+  bell.hidden = !notes;
+  const unread = notes ? notes.filter((n) => !n.read_at).length : 0;
+  const badge = bell.querySelector('.badge');
+  badge.hidden = !unread;
+  badge.textContent = unread > 9 ? '9+' : String(unread);
+  const label = unread ? `Benachrichtigungen, ${unread} ungelesen` : 'Benachrichtigungen';
+  bell.setAttribute('aria-label', label);
+  bell.title = label;
+}
+
+// Lädt die Benachrichtigungen einmal pro Anmeldung und hält sie live aktuell.
+function watchNotifications() {
+  if (!session || notesFor === session.user.id) return;
+  notesFor = session.user.id;
+  if (noteChannel) supabase.removeChannel(noteChannel);
+  noteChannel = supabase.channel(`glocke-${notesFor}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${notesFor}` }, () => loadNotifications())
+    .subscribe();
+  loadNotifications();
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && session && notes !== false) loadNotifications();
+});
+
+// Text und Ziel einer Benachrichtigung.
+function noteContent(n) {
+  if (n.kind === 'invite_accepted') {
+    if (n.target_kind === 'recipe') return { text: `${n.actor_name} hat dein Rezept „${n.title ?? 'Rezept'}“ angenommen.`, href: `#/r/${n.target_id}` };
+    if (n.target_kind === 'list') return { text: `${n.actor_name} hat deine Einladung zur Einkaufsliste „${n.title ?? 'Einkaufsliste'}“ angenommen.`, href: `#/einkauf/${n.target_id}` };
+    return { text: `${n.actor_name} hat deine Einladung zu deinem Kochbuch angenommen.`, href: '#/geteilt' };
+  }
+  return { text: `Neues von ${n.actor_name}.`, href: '#/geteilt' };
+}
+
+function formatWhen(iso) {
+  const d = new Date(iso);
+  const min = Math.round((Date.now() - d) / 60000);
+  if (min < 1) return 'gerade eben';
+  if (min < 60) return `vor ${min} Min.`;
+  const time = d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  const days = Math.round((new Date(`${today()}T12:00:00`) - new Date(`${d.toLocaleDateString('sv-SE')}T12:00:00`)) / 86400000);
+  if (days <= 0) return `heute, ${time}`;
+  if (days === 1) return `gestern, ${time}`;
+  return d.toLocaleDateString('de-DE');
+}
+
+// Liste der Benachrichtigungen. Ungelesene sind hervorgehoben, solange das Blatt offen ist;
+// beim Schließen gelten alle als gelesen.
+async function openNotifications() {
+  const shown = notes || [];
+  const unread = shown.filter((n) => !n.read_at).map((n) => n.id);
+  const { value } = await openSheet(`<h2>Benachrichtigungen</h2>
+    ${shown.length ? `<ul class="notes">${shown.map((n) => {
+      const { text, href } = noteContent(n);
+      return `<li class="note${n.read_at ? '' : ' unread'}"><button class="note-btn" value="${esc(href)}" formnovalidate>
+        <span>${esc(text)}</span><small>${esc(formatWhen(n.created_at))}</small></button></li>`;
+    }).join('')}</ul>` : '<p class="hint">Keine Benachrichtigungen.</p>'}
+    <p class="hint">Gelesene verschwinden nach 7 Tagen.</p>
+    <div class="row"><button class="btn primary" value="ok">Schließen</button></div>`);
+  if (unread.length) {
+    const { error } = await supabase.rpc('mark_notifications_read', { p_ids: unread });
+    if (!error) {
+      const now = new Date().toISOString();
+      shown.forEach((n) => { if (!n.read_at) n.read_at = now; });
+      drawBell();
+    }
+  }
+  if (value.startsWith('#/')) location.hash = value;
 }
 
 // ---------- Benutzername ----------
@@ -3619,7 +3713,7 @@ if (isConfigured) {
     const userChanged = newSession?.user?.id !== session?.user?.id;
     session = newSession;
     if (event === 'PASSWORD_RECOVERY') recoveringPassword = true;
-    if (userChanged) { recipes = null; myName = undefined; categories = null; places = null; cookbookCache.clear(); }
+    if (userChanged) { recipes = null; myName = undefined; categories = null; places = null; notes = null; notesFor = null; cookbookCache.clear(); }
     // Nur bei echten Wechseln neu zeichnen, nicht beim stillen Token-Refresh.
     if (userChanged || event === 'PASSWORD_RECOVERY' || event === 'SIGNED_OUT') setTimeout(render);
   });
