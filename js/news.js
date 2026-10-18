@@ -5,6 +5,20 @@
 
 export const NEWS = [
   {
+    version: '2026-10-18-auge',
+    title: 'Geteilte Kochbücher ausblenden',
+    lines: [
+      { text: 'Unter „Teilen“ steht hinter jedem Kochbuch, das jemand mit dir teilt, ein Auge. Ausgeblendete Kochbücher tauchen bei „Was kochen?“, in der Saison und beim Kombinieren nicht mehr auf.', ziel: '#/geteilt' },
+    ],
+  },
+  {
+    version: '2026-10-18-geheimnis',
+    title: 'Familiengeheimnis',
+    lines: [
+      { text: 'Im Bearbeiten-Formular gibt es das Häkchen „Familiengeheimnis“. Solche Rezepte sehen Leser deines Kochbuchs nicht, auch nicht bei „Was kochen?“ oder als Alternative. Wem du das Rezept einzeln schickst, der sieht es trotzdem.', ziel: '#/hilfe/teilen' },
+    ],
+  },
+  {
     version: '2026-10-18-namen',
     title: 'Eindeutige Benutzernamen',
     lines: [
