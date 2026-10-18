@@ -109,6 +109,7 @@ export const HELP = [
       'Mit dem Einladungslink für dein Kochbuch kann jeder mit Konto alle deine Rezepte ansehen und übernehmen, aber nichts ändern.',
       'Ein neuer Einladungslink macht den alten ungültig; wer schon Zugriff hat, behält ihn. Lesezugriff kannst du einzeln entfernen.',
       'Ein einzelnes Rezept teilst du im Rezept selbst: dieser Link funktioniert ohne Konto.',
+      'Familiengeheimnis: Setzt du beim Bearbeiten eines Rezepts das Häkchen „Familiengeheimnis“, sehen es Leser deines Kochbuchs nicht. Wem du das Rezept einzeln schickst, der sieht es trotzdem.',
       'Dein Benutzername ist das, was andere von dir sehen; du kannst ihn hier ändern. Jeden Namen gibt es nur einmal, Groß- und Kleinschreibung zählt dabei nicht. Schon beim Tippen siehst du, ob er noch frei ist.',
       'Kochbücher, die andere mit dir geteilt haben, stehen oben auf dieser Seite und lassen sich wieder verlassen.',
       'Abmelden findest du unter „Verwalten“, unter den anderen Einträgen.',

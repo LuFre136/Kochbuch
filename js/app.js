@@ -43,6 +43,7 @@ let myName; // Benutzername: undefined = noch nicht geladen, null = fehlt noch, 
 let links = null; // Alternativ-Verknüpfungen [{ recipe_a, recipe_b }]; null = noch nicht geladen
 let linksTable = true; // false, solange alternativen.sql nicht ausgeführt wurde
 let cookedColumn = true; // false, solange gekocht.sql nicht ausgeführt wurde
+let secretColumn = true; // false, solange familiengeheimnis.sql nicht ausgeführt wurde
 let pendingNew = null; // Vorbelegung für ein neues Rezept, z. B. aus dem Kombinieren
 let activeTag = null;
 let listSort = 'name';
@@ -98,6 +99,7 @@ async function loadRecipes(force = false) {
   // Die Spalte last_cooked gibt es erst nach gekocht.sql; ohne sie entfällt die
   // Sortierung "Zuletzt gekocht".
   if (data.length) cookedColumn = 'last_cooked' in data[0];
+  if (data.length) secretColumn = 'family_secret' in data[0];
   recipes = data.sort((a, b) => collator.compare(a.title, b.title));
   return recipes;
 }
@@ -969,9 +971,13 @@ function recipeCard(r, href = `#/r/${r.id}`, byId = null) {
     .filter(Boolean).map((m) => `<span>${esc(m)}</span>`).join('');
   return `<a class="card${altStack(r)}" href="${href}">
     ${img}
-    <div class="card-body"><h2>${esc(r.title)}${altMark(r, byId)}</h2><div class="meta">${meta}</div></div>
+    <div class="card-body"><h2>${secretMark(r)}${esc(r.title)}${altMark(r, byId)}</h2><div class="meta">${meta}</div></div>
   </a>`;
 }
+
+// Schloss vor dem Titel eines Familiengeheimnisses. Leser fremder Kochbücher bekommen
+// solche Rezepte gar nicht erst; sieht man eines, ist es eigenes oder einzeln geschickt.
+const secretMark = (r) => (r.family_secret ? '<span class="secret-mark" title="Familiengeheimnis" aria-label="Familiengeheimnis">🔒</span> ' : '');
 
 // Zeigt ein eigenes Rezept. altId: die gerade angezeigte Alternative des Rezepts id.
 async function renderDetail(id, altId = null) {
@@ -1045,9 +1051,10 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
         ${prev ? `<button type="button" class="stack-edge prev" data-alt="${index - 1}" aria-label="Zurück zu „${esc(prev.title)}“"><span>‹</span></button>` : ''}
         ${next ? `<button type="button" class="stack-edge next" data-alt="${index + 1}" aria-label="Weiter zu „${esc(next.title)}“"><span>›</span></button>` : ''}
         <div class="recipe-card">
-          <h1>${esc(r.title)}</h1>
+          <h1>${secretMark(r)}${esc(r.title)}</h1>
           ${own ? `<div class="stars" role="group" aria-label="Bewertung">${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-star="${n}" class="${(r.rating ?? 0) >= n ? 'on' : ''}" aria-label="${n} von 5 Sternen" aria-pressed="${r.rating === n}">★</button>`).join('')}</div>`
     : r.rating ? `<div class="stars readonly" aria-label="${r.rating} von 5 Sternen">${'★'.repeat(r.rating)}${'☆'.repeat(5 - r.rating)}</div>` : ''}
+          ${r.family_secret && own ? '<p class="hint secret-hint">Familiengeheimnis: Wer dein Kochbuch liest, sieht dieses Rezept nicht.</p>' : ''}
           ${r.description ? `<p class="lead">${esc(r.description)}</p>` : ''}
           ${r.tags.length ? `<div class="chips static">${r.tags.map((t) => `<span class="chip">${esc(t)}</span>`).join('')}</div>` : ''}
           ${r.total_minutes != null || r.cook_minutes != null || r.last_cooked ? `<dl class="times">
@@ -1565,6 +1572,8 @@ async function renderCombine(mainId) {
       images: [],
       imagePaths: combinedImages(chosen), // Bilder aller beteiligten Rezepte werden kopiert
       combinedFrom: chosen.filter((r) => !r.from).map((r) => r.id),
+      // Steckt ein Familiengeheimnis drin, ist auch das neue Rezept eines.
+      family_secret: chosen.some((r) => r.family_secret),
     };
     location.hash = '#/neu';
   };
@@ -1894,6 +1903,8 @@ async function renderEditor(id) {
         </div>
         <datalist id="known-tags">${knownTags.map((t) => `<option value="${esc(t)}">`).join('')}</datalist>
       </fieldset>
+      ${secretColumn ? `<label class="check secret-check"><input type="checkbox" name="family_secret"${r.family_secret ? ' checked' : ''}>
+        <span>🔒 Familiengeheimnis<small>Nur für dich und für Personen, denen du das Rezept einzeln schickst. Wer dein Kochbuch liest, sieht es nicht.</small></span></label>` : ''}
 
       <div class="cols">
         <label>Anzahl Portionen <input name="servings" type="number" min="1" max="100" required value="${r.servings}"></label>
@@ -2198,6 +2209,8 @@ async function renderEditor(id) {
         notes: form.notes.value.trim(),
         images: [...keptImages, ...uploaded],
       };
+      // Die Spalte gibt es erst nach familiengeheimnis.sql.
+      if (form.family_secret) row.family_secret = form.family_secret.checked;
       const nutrition = { per: form.nutrition_per.value };
       NUTRIENTS.forEach(([k]) => {
         const v = form[`n_${k}`].value;
@@ -2960,6 +2973,8 @@ async function copyRecipe(r, button) {
       notes: r.notes,
       images: uploaded,
       ...(hasNutrition(r.nutrition) ? { nutrition: r.nutrition } : {}),
+      // Ein übernommenes Familiengeheimnis bleibt eines, sonst sähen es die eigenen Leser.
+      ...(r.family_secret ? { family_secret: true } : {}),
     };
     const { data, error } = await supabase.from('recipes').insert(row).select().single();
     if (error) throw error;
