@@ -85,6 +85,45 @@ export function askPlayerState(iframe, video) {
   }
 }
 
+// Zweiter Versuch, wenn die Wiedergabe nicht anläuft: Browser verweigern den Start mit
+// Ton ohne Geste im Video selbst (TikTok meldet das als AUTOPLAY_ERROR 3002). Stumm
+// angestoßen läuft es, danach wird der Ton wieder eingeschaltet.
+export function playMuted(iframe, video, seconds = null) {
+  const win = iframe?.contentWindow;
+  if (!win) return;
+  if (video.provider === 'youtube') {
+    const send = (func, args = []) => win.postMessage(JSON.stringify({ event: 'command', func, args }), '*');
+    send('mute');
+    if (seconds != null) send('seekTo', [seconds, true]);
+    send('playVideo');
+    setTimeout(() => send('unMute'), 600);
+  } else {
+    const send = (type, value) => win.postMessage({ type, value, 'x-tiktok-player': true }, '*');
+    send('mute');
+    if (seconds != null) send('seekTo', seconds);
+    send('play');
+    setTimeout(() => send('unMute'), 600);
+  }
+}
+
+// Liest aus einer Nachricht des Players, ob gerade abgespielt wird: 'playing', 'stopped'
+// oder null, wenn die Nachricht nichts darüber sagt. Zustand 1 = läuft, 3 = puffert.
+// YouTube schickt JSON-Strings, TikTok Objekte (onStateChange).
+export function playerState(data) {
+  let msg = data;
+  if (typeof msg === 'string') {
+    try { msg = JSON.parse(msg); } catch { return null; }
+  }
+  if (!msg || typeof msg !== 'object') return null;
+  const kind = msg.event ?? msg.type;
+  let state = null;
+  if (kind === 'onStateChange') state = msg.info ?? msg.value;
+  else if (kind === 'infoDelivery') state = msg.info?.playerState;
+  if (typeof state === 'string' && state.trim() !== '') state = Number(state);
+  if (typeof state !== 'number' || !Number.isFinite(state)) return null;
+  return state === 1 || state === 3 ? 'playing' : 'stopped';
+}
+
 // Hält den Player an — beim Wechsel zu einem anderen Video, damit im Verborgenen nichts
 // weiterläuft. Die Stelle bleibt erhalten, der Player muss nicht neu geladen werden.
 export function pausePlayer(iframe, video) {
