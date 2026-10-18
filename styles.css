@@ -569,3 +569,15 @@ dialog.sheet.full {
 .place-checks { grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); gap: 8px; }
 .place-checks .check { color: var(--text); font-size: 1rem; align-items: center; }
 #place-list .row { gap: 12px; }
+
+/* Verwalten und Hilfe */
+.manage-list { display: grid; gap: 12px; }
+.manage-item { display: grid; gap: 4px; text-decoration: none; color: inherit; }
+.manage-item strong { font-size: 1.05rem; }
+.manage-item small { color: var(--muted); }
+.manage-item:hover, .manage-item:focus-visible { border-color: var(--accent); }
+.help-topic { margin-bottom: 12px; padding: 14px 18px; }
+.help-topic summary { font-weight: 600; cursor: pointer; }
+.help-lines { margin: 10px 0 0; padding-left: 20px; display: grid; gap: 8px; }
+.help-lines li { color: var(--text); }
+#help-btn { font-weight: 700; }
