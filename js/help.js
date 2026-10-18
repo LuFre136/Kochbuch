@@ -26,6 +26,7 @@ export const HELP = [
       'Aus einem Video: ein gespeichertes TikTok oder Reel bis 50 MB, wenn das Rezept nur gesprochen wird.',
       'Text einfügen: zum Beispiel ein Kommentar, in dem das Rezept steht.',
       'Prüfe nach jedem Import die Mengen und Schritte — die Auswertung kann sich irren — und tippe dann auf Speichern.',
+      'Unter dem Zutatenfeld steht jede Zutat mit Kategorie und Einkaufsorten. Wische eine Zutat zur Seite und tippe auf „Ändern“, um beides zu ändern.',
     ],
   },
   {
@@ -97,8 +98,19 @@ export const HELP = [
     lines: [
       'Du kannst mehrere Listen führen, etwa eine pro Haushalt oder Woche.',
       'Zutaten kommen aus einem Rezept oder von Hand dazu; gleiche Zutaten werden zusammengefasst.',
-      'Jede Zutat hat eine Kategorie und einen Einkaufsort; über „Verwalten“ in der Liste stellst du beides ein und filterst nach Ort.',
+      'Jede Zutat hat eine Kategorie und mindestens einen Einkaufsort. Wische einen Eintrag nach rechts, um beides zu ändern; oben filterst du die Liste nach Ort.',
       '„Verwalten“ gibt dir auch einen Einladungslink, mit dem eine Person die Liste mitbearbeiten kann — Änderungen erscheinen bei allen sofort. Jeder Link gilt für eine Person.',
+    ],
+  },
+  {
+    id: 'zutaten',
+    title: 'Zutaten und Einkaufsorte',
+    routes: ['zutaten', 'orte'],
+    lines: [
+      'Unter „Verwalten“ → „Zutaten“ stehen alle deine Zutaten nach Kategorien. Tippe eine an, um ihre Kategorie und ihre Einkaufsorte zu ändern; das gilt in allen Rezepten und Einkaufslisten.',
+      'Oben erfasst du neue Zutaten, bevor sie in einem Rezept vorkommen. Die App schlägt Kategorie und Orte vor.',
+      'Jede Zutat hat mindestens einen Ort. Löschst du einen Ort, bekommen Zutaten, die nur diesen hatten, wieder einen vorgeschlagenen.',
+      'Unter „Verwalten“ → „Orte“ legst du Einkaufsorte an, benennst sie um, sortierst sie mit den Pfeilen und löschst sie. Ein Ort bleibt immer.',
     ],
   },
   {
@@ -112,7 +124,7 @@ export const HELP = [
       'Unter „Offene Einladungen“ siehst du verschickte Links, die noch niemand beantwortet hat, und kannst sie zurückziehen.',
       'Die Glocke oben rechts meldet, wenn jemand deine Einladung angenommen hat. Ungelesenes ist hervorgehoben; Gelesenes verschwindet nach 7 Tagen.',
       'Nimmst du die Einladung zu einem Kochbuch an, fragt die App, ob du dein eigenes zurückteilen möchtest. Die andere Person bekommt das Angebot in die Glocke und nimmt dort an oder lehnt ab.',
-      'Familiengeheimnis: Setzt du beim Bearbeiten eines Rezepts das Häkchen „Familiengeheimnis“, sehen es Leser deines Kochbuchs nicht. Wem du das Rezept einzeln schickst, der sieht es trotzdem.',
+      'Familiengeheimnis: Schließt du beim Bearbeiten eines Rezepts das Schloss „Familiengeheimnis“, sehen es Leser deines Kochbuchs nicht. Wem du das Rezept einzeln schickst, der sieht es trotzdem.',
       'Dein Benutzername ist das, was andere von dir sehen; du kannst ihn hier ändern. Jeden Namen gibt es nur einmal, Groß- und Kleinschreibung zählt dabei nicht. Schon beim Tippen siehst du, ob er noch frei ist.',
       'Kochbücher, die andere mit dir geteilt haben, stehen oben auf dieser Seite und lassen sich wieder verlassen. Das Auge dahinter blendet ein Kochbuch aus: Es erscheint dann nicht mehr bei „Was kochen?“, in der Saison und beim Kombinieren, bleibt aber hier zum Öffnen stehen.',
       'Abmelden findest du unter „Verwalten“, unter den anderen Einträgen.',
