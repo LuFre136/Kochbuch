@@ -418,12 +418,24 @@ function formatWhen(iso) {
   return d.toLocaleDateString('de-DE');
 }
 
-// Liste der Benachrichtigungen. Ungelesene sind hervorgehoben, solange das Blatt offen ist;
-// beim Schließen gelten alle als gelesen.
-async function openNotifications() {
+// Liste der Benachrichtigungen als Seite, die von rechts unter die Kopfzeile gleitet und
+// auf dem Handy den ganzen Bildschirm darunter füllt. Die Kopfzeile bleibt stehen; die
+// Glocke oder der Pfeil oben links schließen die Liste wieder. Ungelesene sind
+// hervorgehoben, solange die Liste offen ist; beim Schließen gelten alle als gelesen.
+let notePanel = null;
+
+function openNotifications() {
+  if (notePanel) { closeNotifications(); return; }
   const shown = notes || [];
   const unread = shown.filter((n) => !n.read_at).map((n) => n.id);
-  const { value } = await openSheet(`<h2>Benachrichtigungen</h2>
+  const panel = document.createElement('section');
+  panel.className = 'note-panel';
+  panel.setAttribute('role', 'dialog');
+  panel.setAttribute('aria-label', 'Benachrichtigungen');
+  panel.innerHTML = `<header class="picker-head">
+      <button type="button" class="icon-btn" data-close aria-label="Zurück">←</button>
+      <h2>Benachrichtigungen</h2>
+    </header>
     ${shown.length ? `<ul class="notes">${shown.map((n) => {
       const { text, href, offer } = noteContent(n);
       if (offer) {
@@ -431,15 +443,40 @@ async function openNotifications() {
         return `<li class="note offer${n.read_at ? '' : ' unread'}"><div class="note-btn">
           <span>${esc(text)}</span><small>${esc(formatWhen(n.created_at))}</small>
           ${n.invite_status === 'offen' ? `<div class="row">
-            <button class="btn small primary" value="annehmen:${n.invite_id}" formnovalidate>Annehmen</button>
-            <button class="btn small" value="ablehnen:${n.invite_id}" formnovalidate>Ablehnen</button></div>`
+            <button type="button" class="btn small primary" data-answer="annehmen" data-invite="${esc(n.invite_id)}">Annehmen</button>
+            <button type="button" class="btn small" data-answer="ablehnen" data-invite="${esc(n.invite_id)}">Ablehnen</button></div>`
     : `<small>${esc(OFFER_STATE[n.invite_status] ?? '')}</small>`}</div></li>`;
       }
-      return `<li class="note${n.read_at ? '' : ' unread'}"><button class="note-btn" value="${esc(href)}" formnovalidate>
-        <span>${esc(text)}</span><small>${esc(formatWhen(n.created_at))}</small></button></li>`;
+      return `<li class="note${n.read_at ? '' : ' unread'}"><a class="note-btn" href="${esc(href)}">
+        <span>${esc(text)}</span><small>${esc(formatWhen(n.created_at))}</small></a></li>`;
     }).join('')}</ul>` : '<p class="hint">Keine Benachrichtigungen.</p>'}
-    <p class="hint">Gelesene verschwinden nach 7 Tagen.</p>
-    <div class="row"><button class="btn primary" value="ok">Schließen</button></div>`);
+    <p class="hint">Gelesene verschwinden nach 7 Tagen.</p>`;
+  // Die Liste beginnt direkt unter der Kopfzeile, wie hoch die auch gerade ist.
+  panel.style.top = `${document.querySelector('.topbar').getBoundingClientRect().bottom}px`;
+  document.body.append(panel);
+  document.documentElement.classList.add('sheet-open');
+  notePanel = { panel, unread, shown };
+  requestAnimationFrame(() => panel.classList.add('open'));
+  panel.querySelector('[data-close]').onclick = () => closeNotifications();
+  panel.querySelectorAll('a.note-btn').forEach((a) => { a.onclick = () => closeNotifications(); });
+  panel.querySelectorAll('[data-answer]').forEach((b) => {
+    b.onclick = async () => {
+      await closeNotifications();
+      await answerOffer(b.dataset.invite, b.dataset.answer === 'annehmen');
+    };
+  });
+  $('#bell', nav)?.setAttribute('aria-expanded', 'true');
+}
+
+async function closeNotifications() {
+  if (!notePanel) return;
+  const { panel, unread, shown } = notePanel;
+  notePanel = null;
+  panel.classList.remove('open');
+  panel.addEventListener('transitionend', () => panel.remove(), { once: true });
+  setTimeout(() => panel.remove(), 400); // falls keine Animation läuft
+  if (!document.querySelector('dialog[open]')) document.documentElement.classList.remove('sheet-open');
+  $('#bell', nav)?.setAttribute('aria-expanded', 'false');
   if (unread.length) {
     const { error } = await supabase.rpc('mark_notifications_read', { p_ids: unread });
     if (!error) {
@@ -448,10 +485,10 @@ async function openNotifications() {
       drawBell();
     }
   }
-  if (value.startsWith('#/')) location.hash = value;
-  const [answer, inviteId] = value.split(':');
-  if (inviteId && (answer === 'annehmen' || answer === 'ablehnen')) await answerOffer(inviteId, answer === 'annehmen');
 }
+
+window.addEventListener('hashchange', () => { closeNotifications(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeNotifications(); });
 
 // ---------- Benutzername ----------
 

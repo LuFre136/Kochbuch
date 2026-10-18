@@ -633,3 +633,15 @@ dialog.sheet.full {
 .note.offer .row { margin-top: 6px; }
 .note.offer .note-btn { cursor: default; }
 .note.offer .row { margin-top: 6px; }
+
+/* Benachrichtigungen: Seite, die von rechts unter die Kopfzeile gleitet */
+.note-panel {
+  position: fixed; right: 0; bottom: 0; z-index: 15; width: 100%; max-width: 440px;
+  display: flex; flex-direction: column; gap: 12px; overflow-y: auto; overscroll-behavior: contain;
+  padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
+  background: var(--bg); border-left: 1px solid var(--border); box-shadow: var(--shadow);
+  transform: translateX(100%); transition: transform 0.25s ease;
+}
+.note-panel.open { transform: none; }
+.note-panel a.note-btn { text-decoration: none; }
+@media (prefers-reduced-motion: reduce) { .note-panel { transition: none; } }

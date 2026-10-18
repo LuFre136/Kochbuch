@@ -5,6 +5,13 @@
 
 export const NEWS = [
   {
+    version: '2026-10-18-glocke-seite',
+    title: 'Benachrichtigungen als eigene Seite',
+    lines: [
+      { text: 'Ein Tipp auf die Glocke schiebt die Benachrichtigungen jetzt von rechts herein; die Kopfzeile bleibt stehen. Der Pfeil oben links führt zurück.' },
+    ],
+  },
+  {
     version: '2026-10-18-zurueckteilen',
     title: 'Kochbuch zurückteilen',
     lines: [
