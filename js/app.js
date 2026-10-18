@@ -974,6 +974,11 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
   // und beim Wechseln geht die Stelle im anderen Video nicht verloren.
   const mediaHtml = () => tabs.map((t, i) => `<div class="media-panel" data-panel="${esc(t.key)}"${i ? ' hidden' : ''}>
     ${t.video ? videoHtml(t.video) : galleryHtml()}</div>`).join('');
+  // Videos und Bilder stehen bei der Zubereitung: dort, wo man beim Kochen hinschaut.
+  const mediaBlock = shown ? `${tabs.length > 1 ? `<div class="media-tabs" id="media-tabs" role="tablist">${tabs.map((t, i) => `<button type="button" class="chip${i === 0 ? ' active' : ''}"
+      data-media="${esc(t.key)}" role="tab" aria-selected="${i === 0}">${esc(t.label)}</button>`).join('')}</div>` : ''}
+    <div class="media" id="media-box">${mediaHtml()}</div>` : '';
+
   // Alternativen liegen als Kartenstapel hinter der aktuellen Karte: in die Richtungen,
   // in die auch gewischt werden kann.
   const prev = index > 0 ? group[index - 1] : null;
@@ -983,9 +988,6 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
     <article class="recipe">
       ${back ? `<a class="back" href="${back}">← ${esc(backLabel)}</a>` : ''}
       ${from ? `<p class="hint from">${esc(from)}</p>` : ''}
-      ${shown ? `${tabs.length > 1 ? `<div class="media-tabs" id="media-tabs" role="tablist">${tabs.map((t, i) => `<button type="button" class="chip${i === 0 ? ' active' : ''}"
-        data-media="${esc(t.key)}" role="tab" aria-selected="${i === 0}">${esc(t.label)}</button>`).join('')}</div>` : ''}
-      <div class="media" id="media-box">${mediaHtml()}</div>` : ''}
       <div class="stack${prev ? ' has-prev' : ''}${next ? ' has-next' : ''}">
         ${prev ? `<button type="button" class="stack-edge prev" data-alt="${index - 1}" aria-label="Zurück zu „${esc(prev.title)}“"><span>‹</span></button>` : ''}
         ${next ? `<button type="button" class="stack-edge next" data-alt="${index + 1}" aria-label="Weiter zu „${esc(next.title)}“"><span>›</span></button>` : ''}
@@ -1020,6 +1022,7 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
       </section>` : ''}
 
       ${r.steps.length ? `<section><h2>Zubereitung</h2>
+        ${mediaBlock}
         <ol class="steps">${r.steps.map((s) => {
     const v = stepVideo(s, videos);
     const t = v ? stepTime(s) : null;
@@ -1027,7 +1030,7 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
     const n = videos.length > 1 ? `${videos.indexOf(v) + 1} · ` : '';
     return `<li>${t != null ? `<button type="button" class="seek" data-t="${t}" data-video="${esc(v.key)}"
       aria-label="Video ${videos.length > 1 ? `${videos.indexOf(v) + 1} ` : ''}ab ${formatTime(t)} abspielen">▶ ${n}${formatTime(t)}</button> ` : ''}${esc(stepText(s))}</li>`;
-  }).join('')}</ol></section>` : ''}
+  }).join('')}</ol></section>` : mediaBlock}
 
       ${hasNutrition(r.nutrition) ? `<section><h2>Nährwerte <small class="hint">${r.nutrition.per === '100 g' ? 'pro 100 g' : 'pro Portion'}</small></h2>
         <dl class="nutrition">${NUTRIENTS.filter(([k]) => r.nutrition[k] != null).map(([k, label, unit]) => `<div><dt>${label}</dt><dd>${formatNutrient(r.nutrition[k])} ${unit}</dd></div>`).join('')}</dl></section>` : ''}
