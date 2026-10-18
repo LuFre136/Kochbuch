@@ -57,6 +57,8 @@ Der letzte Reiter heißt „Verwalten“ und führt auf eine Sammelseite mit zwe
 
 Die Hilfeseite (`#/hilfe`) zeigt alle Themen als aufklappbare Abschnitte. Die Texte stehen in [`js/help.js`](js/help.js), ein Eintrag je Thema mit `id`, `title`, `lines` und optional `routes`. `routes` nennt die Seiten, auf denen das Fragezeichen oben rechts dieses Thema öffnet (`helpFor(first, action)`); ein Thema ohne `routes` steht nur auf der Hilfeseite. Im Blatt des Fragezeichens führt „Ganze Hilfe“ nach `#/hilfe/<id>`, wo genau dieser Abschnitt offen steht. Neue Hilfe schreibt man also nur in `js/help.js` — Seite und Knopf nehmen sie von dort.
 
+„Was ist neu“ erscheint beim ersten Start nach einem Update als Blatt mit den Änderungen, je Zeile ein Knopf zur passenden Hilfe. Die Einträge stehen in [`js/news.js`](js/news.js), neueste Fassung zuerst, je mit `version`, `title` und `lines` (`text` plus optional `ziel`). Gemerkt wird im Browser (`localStorage`, Schlüssel `kochbuch.news`) nur die `version` des obersten Eintrags, also pro Gerät; beim allerersten Start zeigt die App nichts, und ist die gemerkte Fassung unbekannt, kommen höchstens die drei neuesten Einträge. Unter „Verwalten“ → „Was ist neu“ lässt sich das Blatt jederzeit wieder öffnen. **Bei jeder neuen Fassung gehört oben ein Eintrag dazu**, sonst zeigt das Blatt Altes.
+
 ## Teilen
 
 - **Einzelnes Rezept:** Im Rezept auf „Teilen“ tippen. Der Link (`#/teilen/…`) zeigt das Rezept auch ohne Konto; mit Konto lässt es sich ins eigene Kochbuch übernehmen. „Teilen beenden“ macht den Link ungültig.

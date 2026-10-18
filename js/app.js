@@ -20,6 +20,7 @@ import {
 } from './alternatives.js';
 import { SORTS, sortRecipes, formatCooked, cookedFromPlan } from './sorting.js';
 import { HELP, helpFor, helpTopic } from './help.js';
+import { NEWS, newsSince, latestVersion } from './news.js';
 import {
   ingredientsFromStep, remainingIngredients, ingredientKey, mentionsIngredient,
   scaleIngredient, combinedTitle, stepsForCombine, combinedImages,
@@ -2980,7 +2981,12 @@ function renderManage() {
         <strong>Hilfe</strong>
         <small>Kurze Anleitungen zu allen Bereichen der App</small>
       </a>
+      <button type="button" class="manage-item card-panel" id="news-again">
+        <strong>Was ist neu</strong>
+        <small>Die Änderungen der letzten Fassungen noch einmal ansehen</small>
+      </button>
     </nav>`;
+  $('#news-again').onclick = () => openNewsSheet(NEWS.slice(0, 2));
 }
 
 const helpLines = (topic) => `<ul class="help-lines">${topic.lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>`;
@@ -3004,6 +3010,31 @@ async function openHelpSheet(topic) {
     <div class="row"><button class="btn primary" value="ok">Verstanden</button>
       <button class="btn ghost" value="alle" formnovalidate>Ganze Hilfe</button></div>`);
   if (value === 'alle') location.hash = `#/hilfe/${topic.id}`;
+}
+
+const NEWS_KEY = 'kochbuch.news';
+
+// Beim ersten Start nach einem Update: zeigt, was dazugekommen ist. Die gesehene Fassung
+// liegt im Browser, also pro Gerät — am Handy kommt das Blatt noch einmal.
+function showNewsIfUpdated() {
+  let seen = null;
+  try { seen = localStorage.getItem(NEWS_KEY); } catch { return; }
+  const neu = newsSince(seen);
+  try { localStorage.setItem(NEWS_KEY, latestVersion()); } catch { /* privater Modus */ }
+  if (neu.length) openNewsSheet(neu);
+}
+
+async function openNewsSheet(entries) {
+  // Jede Zeile kann einen Knopf haben, der das Blatt schließt und zur passenden Stelle führt;
+  // der Wert des Knopfs ist die Adresse.
+  const { value } = await openSheet(`<h2>Was ist neu</h2>
+    ${entries.map((e) => `<section class="news-entry">
+      <h3>${esc(e.title)}</h3>
+      <ul class="help-lines">${e.lines.map((l) => `<li>${esc(l.text)}
+        ${l.ziel ? `<button class="btn small ghost" value="${esc(l.ziel)}" formnovalidate>Ansehen</button>` : ''}</li>`).join('')}</ul>
+    </section>`).join('')}
+    <div class="row"><button class="btn primary" value="ok">Alles klar</button></div>`);
+  if (value.startsWith('#/')) location.hash = value;
 }
 
 async function renderSharing() {
@@ -3433,6 +3464,8 @@ if (isConfigured) {
   session = data.session;
 }
 render();
+
+if (isConfigured && session) showNewsIfUpdated();
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
