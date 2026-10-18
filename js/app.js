@@ -1047,10 +1047,10 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
       aria-label="Video ${videos.length > 1 ? `${videos.indexOf(v) + 1} ` : ''}ab ${formatTime(t)} abspielen">▶ ${n}${formatTime(t)}</button> ` : ''}${esc(stepText(s))}</li>`;
   }).join('')}</ol></section>` : ''}
 
+      ${r.notes ? `<section><h2>Notizen</h2><p class="notes">${linkify(r.notes)}</p></section>` : ''}
+
       ${hasNutrition(r.nutrition) ? `<section><h2>Nährwerte <small class="hint">${r.nutrition.per === '100 g' ? 'pro 100 g' : 'pro Portion'}</small></h2>
         <dl class="nutrition">${NUTRIENTS.filter(([k]) => r.nutrition[k] != null).map(([k, label, unit]) => `<div><dt>${label}</dt><dd>${formatNutrient(r.nutrition[k])} ${unit}</dd></div>`).join('')}</dl></section>` : ''}
-
-      ${r.notes ? `<section><h2>Notizen</h2><p class="notes">${linkify(r.notes)}</p></section>` : ''}
 
       ${sources.length ? `<section><h2>Quellen</h2><ul class="sources">
         ${sources.map(([u, href]) => `<li><a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(hostOf(u))}</a></li>`).join('')}
