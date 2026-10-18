@@ -551,13 +551,15 @@ function setIncludeShared(on) {
   try { localStorage.setItem('kochbuch.includeShared', on ? '1' : '0'); } catch { /* privater Modus */ }
 }
 
-// Eigene Rezepte, plus die aus geteilten Kochbüchern, wenn gewünscht. sharedBooks: Anzahl geteilter Kochbücher.
+// Eigene Rezepte, plus die aus geteilten Kochbüchern, wenn gewünscht. sharedBooks: Anzahl
+// geteilter Kochbücher. Ausgeblendete Kochbücher (Auge unter "Teilen") bleiben außen vor.
 async function searchableRecipes() {
   const [own, people] = await Promise.all([loadRecipes(), loadPeople().catch(() => ({ owners: [] })), loadAlternatives()]);
-  if (!people.owners.length || !includeShared()) return { all: own, sharedBooks: people.owners.length };
-  const books = await Promise.all(people.owners.map((o) => loadCookbook(o.owner_id)));
+  const owners = people.owners.filter((o) => !o.hidden);
+  if (!owners.length || !includeShared()) return { all: own, sharedBooks: owners.length };
+  const books = await Promise.all(owners.map((o) => loadCookbook(o.owner_id)));
   const shared = books.filter(Boolean).flatMap((b) => b.recipes.map((r) => ({ ...r, from: b.email })));
-  return { all: [...own, ...shared], sharedBooks: people.owners.length };
+  return { all: [...own, ...shared], sharedBooks: owners.length };
 }
 
 const recipeHref = (r) => (r.from ? `#/kochbuch/${r.owner_id}/${r.id}` : `#/r/${r.id}`);
@@ -3119,10 +3121,13 @@ async function renderSharing() {
     </section>` : ''}
     <section class="card-panel share-section">
       <h2>Mit mir geteilte Kochbücher</h2>
-      ${owners.length ? `<ul class="people">${owners.map((o) => `<li>
+      ${owners.length ? `<ul class="people">${owners.map((o) => `<li class="${o.hidden ? 'book-hidden' : ''}">
           <a href="#/kochbuch/${o.owner_id}">Kochbuch von ${esc(ownerName(o))}</a>
+          ${'hidden' in o ? `<button class="icon-btn eye" data-eye="${o.owner_id}" aria-pressed="${!o.hidden}"
+            aria-label="${o.hidden ? 'Wieder einblenden' : 'Ausblenden'}" title="${o.hidden ? 'Ausgeblendet: tippen zum Einblenden' : 'Eingeblendet: tippen zum Ausblenden'}">${o.hidden ? EYE_OFF : EYE}</button>` : ''}
           <button class="link danger-link" data-leave="${o.owner_id}">Verlassen</button>
-        </li>`).join('')}</ul>`
+        </li>`).join('')}</ul>
+        ${owners.some((o) => o.hidden) ? '<p class="hint">Ausgeblendete Kochbücher erscheinen nicht bei „Was kochen?“, in der Saison und beim Kombinieren. Öffnen kannst du sie hier weiterhin.</p>' : ''}`
         : '<p class="hint">Noch keine. Wenn dir jemand einen Einladungslink schickt, erscheint sein Kochbuch hier.</p>'}
     </section>
 
@@ -3195,6 +3200,15 @@ async function renderSharing() {
       if (error) toast(error.message); else renderSharing();
     };
   });
+  app.querySelectorAll('[data-eye]').forEach((b) => {
+    b.onclick = async () => {
+      const owner = owners.find((o) => o.owner_id === b.dataset.eye);
+      const { error } = await supabase.rpc('set_cookbook_hidden', { p_owner: owner.owner_id, p_hidden: !owner.hidden });
+      if (error) { toast(error.message); return; }
+      toast(owner.hidden ? 'Wieder eingeblendet' : 'Ausgeblendet');
+      renderSharing();
+    };
+  });
   app.querySelectorAll('[data-leave]').forEach((b) => {
     b.onclick = async () => {
       if (!confirm('Dieses Kochbuch verlassen? Du brauchst dann einen neuen Einladungslink.')) return;
@@ -3208,6 +3222,9 @@ async function renderSharing() {
     b.onclick = () => shareLink(appUrl(`teilen/${r.share_token}`), r.title);
   });
 }
+
+const EYE = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_OFF = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7c2 0 3.7.6 5.1 1.5M22 12s-3.5 7-10 7c-2 0-3.7-.6-5.1-1.5"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/><path d="M3 3l18 18"/></svg>';
 
 async function acceptInvite(token) {
   app.innerHTML = '<p class="loading">Nehme Einladung an …</p>';

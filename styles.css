@@ -596,3 +596,9 @@ dialog.sheet.full {
 .secret-check small { display: block; color: var(--muted); font-size: 0.85rem; margin-top: 2px; }
 .secret-mark { font-size: 0.85em; }
 .secret-hint { margin: 4px 0 0; }
+
+/* Geteilte Kochbücher ein- und ausblenden */
+.people li .eye { margin-left: auto; color: var(--muted); }
+.people li .eye + .danger-link { margin-left: 0; }
+.people li.book-hidden > a { color: var(--muted); }
+.people li.book-hidden .eye { color: var(--muted); opacity: 0.7; }

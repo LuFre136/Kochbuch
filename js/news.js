@@ -5,6 +5,13 @@
 
 export const NEWS = [
   {
+    version: '2026-10-18-auge',
+    title: 'Geteilte Kochbücher ausblenden',
+    lines: [
+      { text: 'Unter „Teilen“ steht hinter jedem Kochbuch, das jemand mit dir teilt, ein Auge. Ausgeblendete Kochbücher tauchen bei „Was kochen?“, in der Saison und beim Kombinieren nicht mehr auf.', ziel: '#/geteilt' },
+    ],
+  },
+  {
     version: '2026-10-18-geheimnis',
     title: 'Familiengeheimnis',
     lines: [
