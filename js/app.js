@@ -38,6 +38,7 @@ let categoriesSaved = true; // false, solange kategorien.sql nicht ausgeführt w
 let places = null; // eigene Einkaufsorte [{ id, name }]; null = noch nicht geladen
 let placesTable = true; // false, solange orte.sql nicht ausgeführt wurde
 let placesSaved = true; // false, solange ingredient_categories keine Spalte places hat
+let takenName = ''; // Name aus der Registrierung, den inzwischen jemand anderes hat
 let myName; // Benutzername: undefined = noch nicht geladen, null = fehlt noch, false = benutzername.sql nicht eingerichtet
 let links = null; // Alternativ-Verknüpfungen [{ recipe_a, recipe_b }]; null = noch nicht geladen
 let linksTable = true; // false, solange alternativen.sql nicht ausgeführt wurde
@@ -334,16 +335,47 @@ async function loadMyName() {
   const { data, error } = await supabase.from('profiles').select('username').eq('user_id', session.user.id).maybeSingle();
   if (error) return false; // Tabelle fehlt noch: ohne Benutzernamen weitermachen
   if (data) return data.username;
-  const wanted = String(session.user.user_metadata?.username ?? '').trim();
+  // Normalerweise legt die Datenbank das Profil schon beim Registrieren an (namen.sql).
+  // Fehlt es, war der Name vergeben oder namen.sql ist noch nicht eingerichtet.
+  const wanted = normalizeName(session.user.user_metadata?.username);
   if (USERNAME_RE.test(wanted)) {
     const { error: insertError } = await supabase.from('profiles').insert({ username: wanted });
     if (!insertError) return wanted;
+    if (insertError.code === '23505') takenName = wanted;
   }
   return null;
 }
 
+const normalizeName = (name) => String(name ?? '').trim().replace(/\s+/g, ' ');
+
+// Fragt die Datenbank, ob ein Name frei ist. null = unbekannt (namen.sql fehlt oder offline).
+async function nameAvailable(name) {
+  const { data, error } = await supabase.rpc('username_available', { p_name: name });
+  return error ? null : data;
+}
+
+// Zeigt beim Tippen, ob der Name frei ist.
+function watchUsername(input, out, current = '') {
+  let timer;
+  let asked = '';
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    const name = normalizeName(input.value);
+    out.textContent = USERNAME_HINT;
+    out.classList.remove('taken', 'free');
+    if (!USERNAME_RE.test(name) || name.toLowerCase() === current.toLowerCase()) return;
+    timer = setTimeout(async () => {
+      asked = name;
+      const free = await nameAvailable(name);
+      if (asked !== name || normalizeName(input.value) !== name || free === null) return;
+      out.textContent = free ? `✓ „${name}“ ist frei` : `„${name}“ ist schon vergeben`;
+      out.classList.add(free ? 'free' : 'taken');
+    }, 400);
+  });
+}
+
 async function saveMyName(name) {
-  const username = name.trim().replace(/\s+/g, ' ');
+  const username = normalizeName(name);
   if (!USERNAME_RE.test(username)) return USERNAME_HINT;
   const { error } = await supabase.from('profiles').upsert({ user_id: session.user.id, username });
   if (error) return error.code === '23505' ? 'Dieser Benutzername ist schon vergeben.' : error.message;
@@ -357,13 +389,15 @@ function renderUsername() {
   app.innerHTML = `
     <form class="auth card-panel" id="username-form">
       <h1>Wähle einen Benutzernamen</h1>
+      ${takenName ? `<p class="notice-inline">Den Namen „${esc(takenName)}“ hat sich inzwischen jemand anderes genommen. Bitte wähle einen anderen.</p>` : ''}
       <p class="hint">Wenn du Rezepte, dein Kochbuch oder Einkaufslisten teilst, sehen andere nur diesen Namen, nicht deine E-Mail-Adresse.</p>
       <label>Benutzername <input name="username" required minlength="3" maxlength="30" autocomplete="username" autocapitalize="off"></label>
-      <small class="hint">${USERNAME_HINT}</small>
+      <small class="hint name-check" id="name-check">${USERNAME_HINT}</small>
       <button class="btn primary">Speichern</button>
       <p class="hint" id="msg" role="status"></p>
     </form>`;
   const form = $('#username-form');
+  watchUsername(form.username, $('#name-check'));
   form.onsubmit = async (e) => {
     e.preventDefault();
     const problem = await saveMyName(form.username.value);
@@ -397,6 +431,7 @@ function renderLogin(hint = '') {
       <label>E-Mail <input type="email" name="email" autocomplete="email" required></label>
       <label>Passwort <input type="password" name="password" autocomplete="current-password" minlength="6" required></label>
       <label>Benutzername <small>(nur beim Registrieren)</small> <input name="username" maxlength="30" autocomplete="username" autocapitalize="off"></label>
+      <small class="hint name-check" id="name-check" hidden></small>
       <div class="row">
         <button class="btn primary" name="mode" value="login">Anmelden</button>
         <button class="btn" name="mode" value="signup">Registrieren</button>
@@ -406,6 +441,9 @@ function renderLogin(hint = '') {
     </form>`;
   const form = $('#auth');
   const msg = $('#msg');
+  const nameCheck = $('#name-check');
+  watchUsername(form.username, nameCheck);
+  form.username.addEventListener('input', () => { nameCheck.hidden = !form.username.value.trim(); });
   form.onsubmit = async (e) => {
     e.preventDefault();
     const mode = e.submitter?.value || 'login';
@@ -415,8 +453,9 @@ function renderLogin(hint = '') {
     form.querySelectorAll('button').forEach((b) => { b.disabled = true; });
     try {
       if (mode === 'signup') {
-        const username = form.username.value.trim().replace(/\s+/g, ' ');
+        const username = normalizeName(form.username.value);
         if (!USERNAME_RE.test(username)) throw new Error(`Bitte einen Benutzernamen angeben. ${USERNAME_HINT}`);
+        if (await nameAvailable(username) === false) throw new Error(`Der Benutzername „${username}“ ist schon vergeben. Bitte wähle einen anderen.`);
         const { data, error } = await supabase.auth.signUp({
           email, password, options: { emailRedirectTo: location.origin + location.pathname, data: { username } },
         });
@@ -2387,12 +2426,14 @@ async function loadPlannedOnLists() {
 }
 
 // Einfacher Dialog von unten. Liefert den Wert des gedrückten Knopfs und das Formular.
-function openSheet(html) {
+// onOpen bekommt das Formular, z. B. um Eingaben schon beim Tippen zu prüfen.
+function openSheet(html, onOpen) {
   return new Promise((resolve) => {
     const dialog = document.createElement('dialog');
     dialog.className = 'sheet';
     dialog.innerHTML = `<form method="dialog" class="sheet-form">${html}</form>`;
     document.body.append(dialog);
+    onOpen?.(dialog.querySelector('form'));
     // Solange ein Dialog offen ist, wird dahinter nicht gescrollt.
     document.documentElement.classList.add('sheet-open');
     dialog.addEventListener('close', () => {
@@ -3111,9 +3152,11 @@ async function renderSharing() {
       for (;;) {
         const { value, form } = await openSheet(`<h2>Benutzername ändern</h2>
           <label>Benutzername <input name="username" required minlength="3" maxlength="30" value="${esc(myName)}" autocapitalize="off"></label>
-          <p class="hint">${esc(problem || USERNAME_HINT)}</p>
+          <p class="hint name-check">${esc(problem || USERNAME_HINT)}</p>
           <div class="row"><button class="btn primary" value="ok">Speichern</button>
-            <button class="btn ghost" value="cancel" formnovalidate>Abbrechen</button></div>`);
+            <button class="btn ghost" value="cancel" formnovalidate>Abbrechen</button></div>`, (sheet) => {
+          watchUsername(sheet.querySelector('[name=username]'), sheet.querySelector('.name-check'), myName);
+        });
         if (value !== 'ok') return;
         problem = await saveMyName(form.username.value);
         if (!problem) break;

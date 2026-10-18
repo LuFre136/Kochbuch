@@ -5,6 +5,13 @@
 
 export const NEWS = [
   {
+    version: '2026-10-18-namen',
+    title: 'Eindeutige Benutzernamen',
+    lines: [
+      { text: 'Beim Registrieren und beim Ändern deines Namens siehst du schon beim Tippen, ob der Name noch frei ist. Jeder Name gehört genau einer Person.', ziel: '#/geteilt' },
+    ],
+  },
+  {
     version: '2026-10-18-nav',
     title: 'Kopfzeile aufgeräumt',
     lines: [
