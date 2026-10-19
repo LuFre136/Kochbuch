@@ -717,6 +717,7 @@ const TABS = [
 // umgebenden Text; auf den Karten färbt das CSS sie im Orangeton.
 const SYMBOLS = {
   lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 8 0V11"/>',
+  grip: '<path d="M5 8h14M5 12h14M5 16h14"/>',
   unlock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 7.6-1.8"/>',
   clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
   cooked: '<circle cx="12" cy="12.5" r="5"/><path d="M3 4v4.5a1.5 1.5 0 0 0 3 0V4M4.5 10v10M21 4c-1.6.8-2.5 3-2.5 6.5H21V20"/>',
@@ -1118,6 +1119,52 @@ function enableSwipe(el, front) {
     if (moved) { moved = false; return; }
     self.close(); openSwipe = null; // Tipp auf ein geöffnetes Element schließt es wieder
   }, true);
+}
+
+// Sortieren per Ziehen an den drei Strichen (.drag-handle) der Einträge (li[data-n]) einer Liste.
+// Beim Loslassen bekommt done die neue Reihenfolge als Liste der alten Nummern.
+function enableDragSort(list, done) {
+  list.querySelectorAll('.drag-handle').forEach((handle) => {
+    handle.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation(); // nicht gleichzeitig wischen
+      closeSwipes();
+      const item = handle.closest('li');
+      handle.setPointerCapture(e.pointerId);
+      item.classList.add('dragging');
+      let lastY = e.clientY;
+      let offset = 0;
+      const move = (ev) => {
+        offset += ev.clientY - lastY;
+        lastY = ev.clientY;
+        // Über die Mitte des Nachbarn gezogen: Platz tauschen. Bewegt wird der Nachbar, damit das
+        // gezogene Element im Dokument bleibt und den Zeiger nicht verliert.
+        const prev = item.previousElementSibling;
+        const next = item.nextElementSibling;
+        if (prev && offset < -prev.offsetHeight / 2) {
+          offset += prev.offsetHeight;
+          item.after(prev);
+        } else if (next && offset > next.offsetHeight / 2) {
+          offset -= next.offsetHeight;
+          item.before(next);
+        }
+        item.style.transform = `translateY(${offset}px)`;
+      };
+      const end = () => {
+        handle.removeEventListener('pointermove', move);
+        handle.removeEventListener('pointerup', end);
+        handle.removeEventListener('pointercancel', end);
+        item.classList.remove('dragging');
+        item.style.transform = '';
+        const order = [...list.querySelectorAll(':scope > li')].map((li) => Number(li.dataset.n));
+        if (order.some((n, i) => n !== i)) done(order);
+      };
+      handle.addEventListener('pointermove', move);
+      handle.addEventListener('pointerup', end);
+      handle.addEventListener('pointercancel', end);
+    });
+  });
 }
 
 // Wischen über ein ganzes Rezept: nach links zum nächsten, nach rechts zum vorherigen.
@@ -2109,8 +2156,8 @@ async function renderEditor(id) {
       ${secretColumn ? `<label class="lock-toggle"><input type="checkbox" name="family_secret"${r.family_secret ? ' checked' : ''}>
         <span class="lock-icon">${symbol('lock', 'sym locked')}${symbol('unlock', 'sym unlocked')}</span>
         <span><strong>Familiengeheimnis</strong>
-          <small class="when-on">Geschlossen: Nur du und Personen, denen du das Rezept einzeln schickst, sehen es. Wer dein Kochbuch liest, nicht.</small>
-          <small class="when-off">Offen: Alle, die dein Kochbuch lesen, sehen dieses Rezept. Tippe aufs Schloss, um es zu verbergen.</small></span></label>` : ''}
+          <span class="lock-texts"><small class="when-on">Geschlossen: Leser deines Kochbuchs sehen es nicht, nur wem du es einzeln schickst.</small>
+          <small class="when-off">Offen: Leser deines Kochbuchs sehen es. Tippe aufs Schloss, um es zu verbergen.</small></span></span></label>` : ''}
 
       <div class="cols">
         <label>Anzahl Portionen <input name="servings" type="number" min="1" max="100" required value="${r.servings}"></label>
@@ -2135,7 +2182,7 @@ async function renderEditor(id) {
       <label>Zutaten <textarea name="ingredients" rows="8" placeholder="200 g Mehl&#10;2 Eier&#10;1 Prise Salz">${esc(r.ingredients.map(ingredientToLine).join('\n'))}</textarea>
         <small>Eine Zutat pro Zeile, Menge zuerst. Die Menge bezieht sich auf die Anzahl Portionen oben.</small></label>
       <ul class="parse-preview" id="preview"></ul>
-      <p class="hint preview-hint">Wische eine Zutat zur Seite, um ihre Kategorie und ihre Einkaufsorte zu ändern.</p>
+      <p class="hint preview-hint">Wische eine Zutat nach links, um Kategorie und Einkaufsorte zu ändern, oder nach rechts, um sie zu löschen. An den drei Strichen ziehst du sie an eine andere Stelle.</p>
 
       <fieldset>
         <legend>Zubereitung</legend>
@@ -2170,17 +2217,18 @@ async function renderEditor(id) {
   const form = $('#editor');
   const preview = $('#preview');
   const drawPreview = () => {
-    const items = parseIngredientText(form.ingredients.value);
-    // Je Zutat Kategorie und Einkaufsorte. Zur Seite wischen zeigt „Ändern“; eine Änderung gilt
-    // für diese Zutat in allen Rezepten und Einkaufslisten.
-    const change = (n) => `<button type="button" class="swipe-btn accent" data-ing="${n}">Ändern</button>`;
-    preview.innerHTML = items.map((i, n) => {
-      const row = `<div class="ing-row"><span class="qty">${esc(formatQuantity(i)) || '–'}</span><span>${ingredientLabel(i)}
-        ${i.name ? `<small class="ing-info">${esc(categoryOf(i.name))} · ${symbol('pin')}${esc(placeLabel(placesOf(i.name)))}</small>` : ''}</span></div>`;
-      return i.name
-        ? `<li class="swipe"><div class="swipe-actions start">${change(n)}</div><div class="swipe-actions end">${change(n)}</div>${row}</li>`
-        : `<li>${row}</li>`;
-    }).join('');
+    // Nur Zeilen, die eine Zutat ergeben; lines[n] ist die Zeile zur n-ten Zutat.
+    const lines = form.ingredients.value.split('\n').filter((l) => parseIngredientLine(l));
+    const items = lines.map(parseIngredientLine);
+    // Je Zutat Kategorie und Einkaufsorte. Nach links wischen zeigt „Ändern“ (gilt für diese Zutat
+    // in allen Rezepten und Einkaufslisten), nach rechts „Löschen“; die drei Striche verschieben sie.
+    preview.innerHTML = items.map((i, n) => `<li class="swipe" data-n="${n}">
+      <div class="swipe-actions start"><button type="button" class="swipe-btn danger" data-drop-ing="${n}">Löschen</button></div>
+      ${i.name ? `<div class="swipe-actions end"><button type="button" class="swipe-btn accent" data-ing="${n}">Ändern</button></div>` : ''}
+      <div class="ing-row"><span class="qty">${esc(formatQuantity(i)) || '–'}</span><span>${ingredientLabel(i)}
+        ${i.name ? `<small class="ing-info">${esc(categoryOf(i.name))} · ${symbol('pin')}${esc(placeLabel(placesOf(i.name)))}</small>` : ''}</span>
+        <button type="button" class="drag-handle" aria-label="${esc(i.name || 'Zutat')} verschieben">${symbol('grip')}</button></div></li>`).join('');
+    const setLines = (list) => { form.ingredients.value = list.join('\n'); drawPreview(); };
     preview.querySelectorAll('.swipe').forEach((el) => enableSwipe(el, el.querySelector('.ing-row')));
     preview.querySelectorAll('[data-ing]').forEach((b) => {
       b.onclick = async () => {
@@ -2188,6 +2236,13 @@ async function renderEditor(id) {
         if (await editIngredient(items[Number(b.dataset.ing)].name)) drawPreview();
       };
     });
+    preview.querySelectorAll('[data-drop-ing]').forEach((b) => {
+      b.onclick = () => {
+        closeSwipes();
+        setLines(lines.filter((_, n) => n !== Number(b.dataset.dropIng)));
+      };
+    });
+    enableDragSort(preview, (order) => setLines(order.map((n) => lines[n])));
   };
   form.ingredients.oninput = drawPreview;
   drawPreview();
@@ -2657,6 +2712,11 @@ function openSheet(html, onOpen) {
     dialog.innerHTML = `<form method="dialog" class="sheet-form">${html}</form>`;
     document.body.append(dialog);
     onOpen?.(dialog.querySelector('form'));
+    // Ist das erste Feld eine Auswahlliste, bekommt die Überschrift den Fokus; sonst klappt das
+    // Handy die Liste gleich beim Öffnen auf.
+    const first = dialog.querySelector('input:not([type=hidden]), select, textarea, button');
+    const heading = dialog.querySelector('h2');
+    if (first?.tagName === 'SELECT' && heading) { heading.tabIndex = -1; heading.autofocus = true; }
     // Solange ein Dialog offen ist, wird dahinter nicht gescrollt.
     document.documentElement.classList.add('sheet-open');
     dialog.addEventListener('close', () => {

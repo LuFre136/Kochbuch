@@ -26,7 +26,7 @@ export const HELP = [
       'Aus einem Video: ein gespeichertes TikTok oder Reel bis 50 MB, wenn das Rezept nur gesprochen wird.',
       'Text einfügen: zum Beispiel ein Kommentar, in dem das Rezept steht.',
       'Prüfe nach jedem Import die Mengen und Schritte — die Auswertung kann sich irren — und tippe dann auf Speichern.',
-      'Unter dem Zutatenfeld steht jede Zutat mit Kategorie und Einkaufsorten. Wische eine Zutat zur Seite und tippe auf „Ändern“, um beides zu ändern.',
+      'Unter dem Zutatenfeld steht jede Zutat mit Kategorie und Einkaufsorten. Nach links wischen und „Ändern“ ändert beides, nach rechts wischen und „Löschen“ entfernt die Zutat. An den drei Strichen rechts ziehst du eine Zutat nach oben oder unten.',
     ],
   },
   {

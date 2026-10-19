@@ -244,7 +244,7 @@ ul.hint { margin: 8px 0 0; padding-left: 1.2rem; }
 .qty { font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
 .parse-preview { margin-top: -6px; font-size: 0.9rem; color: var(--muted); }
 .parse-preview li { display: block; padding: 0; border-radius: 0; }
-.parse-preview .ing-row { display: grid; grid-template-columns: 6.5rem 1fr; gap: 12px; align-items: center; padding: 6px 0; background: var(--bg); }
+.parse-preview .ing-row { display: grid; grid-template-columns: 6.5rem 1fr auto; gap: 12px; align-items: center; padding: 6px 0; background: var(--bg); }
 .swipe > .ing-row { position: relative; z-index: 1; touch-action: pan-y; user-select: none; }
 .ing-info { display: block; margin-top: 1px; font-size: 0.8rem; color: var(--muted); }
 .ing-info .sym { margin-right: 2px; }
@@ -606,10 +606,16 @@ dialog.sheet.full {
 .lock-toggle small { color: var(--muted); font-size: 0.85rem; }
 .lock-icon { display: grid; place-items: center; flex: none; width: 44px; height: 44px; border-radius: 50%; background: var(--surface-2); color: var(--muted); transition: background 0.15s, color 0.15s; }
 .lock-icon .sym { width: 24px; height: 24px; margin: 0; }
-.lock-toggle .locked, .lock-toggle .when-on { display: none; }
+/* Beide Texte liegen im selben Feld übereinander; so bleibt die Höhe beim Umschalten gleich. */
+.lock-texts { display: grid; }
+.lock-texts small { grid-area: 1 / 1; }
+.lock-toggle .locked { display: none; }
+.lock-toggle .when-on { visibility: hidden; }
 .lock-toggle input:checked ~ .lock-icon { background: var(--accent); color: var(--accent-text); }
-.lock-toggle input:checked ~ .lock-icon .locked, .lock-toggle input:checked ~ span .when-on { display: block; }
-.lock-toggle input:checked ~ .lock-icon .unlocked, .lock-toggle input:checked ~ span .when-off { display: none; }
+.lock-toggle input:checked ~ .lock-icon .locked { display: block; }
+.lock-toggle input:checked ~ .lock-icon .unlocked { display: none; }
+.lock-toggle input:checked ~ span .when-on { visibility: visible; }
+.lock-toggle input:checked ~ span .when-off { visibility: hidden; }
 .lock-toggle:has(input:checked) { border-color: var(--accent); }
 .lock-toggle input:focus-visible ~ .lock-icon { outline: 2px solid var(--accent); outline-offset: 2px; }
 .secret-mark { color: var(--accent); margin-right: 0.3em; }
@@ -686,3 +692,11 @@ dialog.sheet.full {
 .place-name { flex: 1; min-width: 0; padding: 4px 0; border: 0; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
 .sheet-form select { display: block; width: 100%; min-height: 44px; margin-top: 4px; padding: 0 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
 .place-list + #add-place { margin-top: 12px; }
+
+/* Zutaten im Formular per Ziehen an den drei Strichen sortieren */
+.drag-handle { display: grid; place-items: center; width: 40px; height: 40px; margin-right: -8px; padding: 0; border: 0; background: none; color: var(--muted); cursor: grab; touch-action: none; }
+.drag-handle .sym { width: 22px; height: 22px; margin: 0; }
+.parse-preview li.dragging { position: relative; z-index: 3; overflow: visible; }
+.parse-preview li.dragging .ing-row { box-shadow: var(--shadow); border-radius: 8px; }
+.parse-preview li.dragging .drag-handle { cursor: grabbing; color: var(--accent); }
+.sheet-form h2:focus { outline: none; }
