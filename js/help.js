@@ -17,6 +17,19 @@ export const HELP = [
     ],
   },
   {
+    id: 'beimkochen',
+    title: 'Beim Kochen: Haken, Timer und Mengen',
+    lines: [
+      'Tippe im Rezept auf eine Zutat oder einen Schritt, um sie durchzustreichen. Ein zweiter Tipp nimmt den Haken zurück.',
+      'Die Haken bleiben auf diesem Gerät stehen, auch wenn du die App schließt. Nach 12 Stunden ohne neuen Haken beginnt das Rezept wieder leer, oder du tippst auf „Haken entfernen“.',
+      'Zeitangaben in den Schritten wie „20 Minuten“ sind eingerahmt. Ein Tipp darauf startet einen Timer; bei einer Spanne wie „10–15 Minuten“ läuft er auf den kleineren Wert.',
+      'Laufende Timer stehen unten auf jeder Seite, mit Pause und Abbrechen. Mehrere Timer können gleichzeitig laufen.',
+      'Ein Timer klingelt nur, solange die App offen ist. Ist sie zu, läuft die Zeit trotzdem weiter, und beim nächsten Öffnen meldet er sich.',
+      'In den Schritten steht hinter jeder Zutat ihre Menge für die eingestellten Portionen, auch bei Anteilen wie „die Hälfte des Mehls“ oder „die restliche Butter“. Der Schalter „Mengen in den Schritten“ blendet sie aus.',
+      'Kommt eine Zutat ohne Anteil in mehreren Schritten vor, steht die Menge nur beim ersten Mal. Nennt ein Schritt die Zutat anders als die Zutatenliste, findet die App sie nicht.',
+    ],
+  },
+  {
     id: 'importieren',
     title: 'Rezept importieren',
     routes: ['neu'],

@@ -25,6 +25,10 @@ import {
   ingredientsFromStep, remainingIngredients, ingredientKey, mentionsIngredient,
   scaleIngredient, combinedTitle, stepsForCombine, combinedImages,
 } from './combine.js';
+import {
+  stepAmounts, stepPieces, formatCountdown, checksFor, toggleCheck, clearChecks,
+  startTimer, timerLeft, timerDone, pauseTimer, resumeTimer, removeTimer,
+} from './cooking.js';
 
 const app = document.getElementById('app');
 const nav = document.getElementById('nav');
@@ -91,6 +95,140 @@ function toast(message) {
   el.textContent = message;
   document.body.append(el);
   setTimeout(() => el.remove(), 3500);
+}
+
+// ---------- Timer ----------
+// Laufende Timer stehen als Leiste unten auf jeder Seite. Gespeichert wird die Endzeit, damit
+// ein Timer weiterläuft, wenn die App zu ist; klingeln kann er nur, solange sie offen ist.
+
+const loadTimers = () => {
+  try { const t = JSON.parse(localStorage.getItem('kochbuch.timers') || '[]'); return Array.isArray(t) ? t : []; } catch { return []; }
+};
+let timers = loadTimers();
+let timerTick = null;
+let audio = null;
+
+function saveTimers() {
+  try { localStorage.setItem('kochbuch.timers', JSON.stringify(timers)); } catch { /* privater Modus */ }
+}
+
+// Der Ton braucht einen AudioContext, den iOS nur nach einem Tipp freigibt; darum entsteht er
+// beim Starten des ersten Timers.
+function unlockAudio() {
+  try {
+    audio ??= new (window.AudioContext || window.webkitAudioContext)();
+    if (audio.state === 'suspended') audio.resume();
+  } catch { audio = null; }
+}
+
+function ring() {
+  navigator.vibrate?.([300, 150, 300, 150, 300]);
+  if (!audio) return;
+  const t0 = audio.currentTime;
+  for (let i = 0; i < 3; i += 1) {
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.0001, t0 + i * 0.5);
+    gain.gain.exponentialRampToValueAtTime(0.4, t0 + i * 0.5 + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + i * 0.5 + 0.35);
+    osc.connect(gain).connect(audio.destination);
+    osc.start(t0 + i * 0.5);
+    osc.stop(t0 + i * 0.5 + 0.4);
+  }
+}
+
+function addTimer(label, seconds) {
+  unlockAudio();
+  timers = startTimer(timers, { label, seconds });
+  saveTimers();
+  drawTimers();
+  toast(`Timer läuft: ${formatCountdown(seconds * 1000)}`);
+}
+
+function drawTimers() {
+  let bar = document.getElementById('timers');
+  if (!timers.length) {
+    bar?.remove();
+    document.body.classList.remove('has-timers');
+    clearInterval(timerTick);
+    timerTick = null;
+    return;
+  }
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'timers';
+    bar.className = 'timers';
+    bar.setAttribute('aria-label', 'Timer');
+    document.body.append(bar);
+    bar.onclick = (e) => {
+      const b = e.target.closest('button[data-t]');
+      if (!b) return;
+      const { t: id, act } = b.dataset;
+      unlockAudio();
+      if (act === 'pause') timers = pauseTimer(timers, id);
+      if (act === 'play') timers = resumeTimer(timers, id);
+      if (act === 'stop') timers = removeTimer(timers, id);
+      saveTimers();
+      drawTimers();
+    };
+  }
+  document.body.classList.add('has-timers');
+  const now = Date.now();
+  bar.innerHTML = timers.map((t) => {
+    const done = timerDone(t, now);
+    const paused = t.end == null;
+    return `<div class="timer${done ? ' ringing' : ''}${paused ? ' paused' : ''}" role="${done ? 'alert' : 'status'}">
+      ${symbol('clock')}<span class="timer-label">${esc(t.label)}</span>
+      <span class="timer-left">${done ? 'Fertig!' : formatCountdown(timerLeft(t, now))}</span>
+      ${done ? '' : `<button type="button" class="icon-btn" data-t="${esc(t.id)}" data-act="${paused ? 'play' : 'pause'}" aria-label="${paused ? 'Weiter' : 'Anhalten'}">${paused ? '▶' : '❙❙'}</button>`}
+      <button type="button" class="icon-btn" data-t="${esc(t.id)}" data-act="stop" aria-label="${done ? 'Timer schließen' : 'Timer abbrechen'}">${done ? 'OK' : '×'}</button>
+    </div>`;
+  }).join('');
+  timerTick ??= setInterval(tickTimers, 1000);
+}
+
+// Jede Sekunde: Anzeige neu, und wer gerade abgelaufen ist, klingelt (einmal, und dann alle
+// 10 Sekunden wieder, bis man ihn schließt).
+function tickTimers() {
+  const now = Date.now();
+  let changed = false;
+  for (const t of timers) {
+    if (!timerDone(t, now)) continue;
+    if (!t.rang || now - t.rang >= 10000) { t.rang = now; changed = true; ring(); }
+  }
+  if (changed) saveTimers();
+  drawTimers();
+}
+
+// ---------- Haken beim Kochen ----------
+
+const loadChecks = () => {
+  try { return JSON.parse(localStorage.getItem('kochbuch.checks') || '{}') || {}; } catch { return {}; }
+};
+function saveChecks(all) {
+  try { localStorage.setItem('kochbuch.checks', JSON.stringify(all)); } catch { /* privater Modus */ }
+}
+
+// Mengen in den Schritten lassen sich abschalten; die Einstellung bleibt auf dem Gerät.
+function showStepAmounts() {
+  try { return localStorage.getItem('kochbuch.stepAmounts') !== '0'; } catch { return true; }
+}
+function setShowStepAmounts(on) {
+  try { localStorage.setItem('kochbuch.stepAmounts', on ? '1' : '0'); } catch { /* privater Modus */ }
+}
+
+// Schritttext mit antippbaren Zeitangaben und, wenn gewünscht, den Mengen der Zutaten.
+// amountOf(amount) liefert den Text für eine Menge, z. B. "125 g".
+function stepTextHtml(text, label, amounts = [], amountOf = null) {
+  return stepPieces(text, amountOf ? amounts : []).map((p) => {
+    if (p.amount) {
+      const q = amountOf(p.amount);
+      return q ? ` <span class="step-qty">(${esc(q)})</span>` : '';
+    }
+    if (p.seconds) return `<button type="button" class="timer-chip" data-timer="${p.seconds}" data-label="${esc(label)}" aria-label="Timer ${esc(p.text)} starten">${symbol('clock')}${esc(p.text)}</button>`;
+    return esc(p.text);
+  }).join('');
 }
 
 async function loadRecipes(force = false) {
@@ -1315,6 +1453,10 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
       data-media="${esc(t.key)}" role="tab" aria-selected="${i === 0}">${esc(t.label)}</button>`).join('')}</div>` : ''}
     <div class="media" id="media-box">${mediaHtml()}</div></div>` : '';
 
+  // Wo in den Schritten Mengen stehen; ohne einen Treffer gibt es auch keinen Schalter dafür.
+  const stepQty = stepAmounts(r.steps.map(stepText), r.ingredients);
+  const hasStepAmounts = stepQty.some((list) => list.length);
+
   // Alternativen liegen als Kartenstapel hinter der aktuellen Karte: in die Richtungen,
   // in die auch gewischt werden kann.
   const prev = index > 0 ? group[index - 1] : null;
@@ -1360,15 +1502,10 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
 
       ${mediaBlock}
 
-      ${r.steps.length ? `<section><h2>Zubereitung</h2>
-        <ol class="steps">${r.steps.map((s) => {
-    const v = stepVideo(s, videos);
-    const t = v ? stepTime(s) : null;
-    // Bei mehreren Videos steht am Zeitstempel, in welchem er liegt.
-    const n = videos.length > 1 ? `${videos.indexOf(v) + 1} · ` : '';
-    return `<li>${t != null ? `<button type="button" class="seek" data-t="${t}" data-video="${esc(v.key)}"
-      aria-label="Video ${videos.length > 1 ? `${videos.indexOf(v) + 1} ` : ''}ab ${formatTime(t)} abspielen">▶ ${n}${formatTime(t)}</button> ` : ''}${esc(stepText(s))}</li>`;
-  }).join('')}</ol></section>` : ''}
+      ${r.steps.length ? `<section><div class="section-head"><h2>Zubereitung</h2>
+        ${hasStepAmounts ? `<label class="check small"><input type="checkbox" id="step-amounts"${showStepAmounts() ? ' checked' : ''}> Mengen in den Schritten</label>` : ''}</div>
+        <ol class="steps" id="steps"></ol></section>` : ''}
+      <p class="checks-bar" id="checks-bar" hidden><button type="button" class="link" id="clear-checks">Haken entfernen</button></p>
 
       ${r.notes ? `<section><h2>Notizen</h2><p class="notes">${linkify(r.notes)}</p></section>` : ''}
 
@@ -1403,16 +1540,60 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
     showAltHint();
   }
 
+  // Schritte mit Zeitstempeln, Timern und den Mengen der Zutaten für die eingestellten Portionen.
+  const stepList = $('#steps');
+  const drawSteps = () => {
+    if (stepList) {
+      const factor = servings / r.servings;
+      const amountOf = showStepAmounts()
+        ? ({ ing, share }) => formatQuantity(r.ingredients[ing], factor * share) : null;
+      stepList.innerHTML = r.steps.map((s, si) => {
+        const v = stepVideo(s, videos);
+        const t = v ? stepTime(s) : null;
+        // Bei mehreren Videos steht am Zeitstempel, in welchem er liegt.
+        const n = videos.length > 1 ? `${videos.indexOf(v) + 1} · ` : '';
+        return `<li class="checkable" data-step="${si}">${t != null ? `<button type="button" class="seek" data-t="${t}" data-video="${esc(v.key)}"
+          aria-label="Video ${videos.length > 1 ? `${videos.indexOf(v) + 1} ` : ''}ab ${formatTime(t)} abspielen">▶ ${n}${formatTime(t)}</button> ` : ''}${stepTextHtml(stepText(s), `${r.title} · Schritt ${si + 1}`, stepQty[si], amountOf)}</li>`;
+      }).join('');
+    }
+    drawChecks();
+  };
+  const stepBox = $('#step-amounts');
+  if (stepBox) stepBox.onchange = () => { setShowStepAmounts(stepBox.checked); drawSteps(); };
+
   const ingList = $('#ing');
   // keepInput: beim Tippen im Feld bleibt die Eingabe stehen, nur die Mengen rechnen neu.
   const drawIngredients = ({ keepInput = false } = {}) => {
-    if (!ingList) return;
+    if (!ingList) { drawSteps(); return; }
     const srv = $('#srv');
     if (srv && !keepInput) srv.value = String(servings);
     $('#srv-unit').textContent = servings === 1 ? 'Portion' : 'Portionen';
     const factor = servings / r.servings;
-    ingList.innerHTML = r.ingredients.map((i) => `<li><span class="qty">${esc(formatQuantity(i, factor))}</span><span>${ingredientLabel(i)}</span></li>`).join('');
+    ingList.innerHTML = r.ingredients.map((i, ii) => `<li class="checkable" data-ing="${ii}"><span class="qty">${esc(formatQuantity(i, factor))}</span><span>${ingredientLabel(i)}</span></li>`).join('');
+    drawSteps();
   };
+  // Haken: ein Tipp auf eine Zutat oder einen Schritt streicht sie durch. Sie bleiben auf dem
+  // Gerät, bis man sie entfernt oder 12 Stunden lang nichts mehr abhakt.
+  const checkKey = r.id;
+  const drawChecks = () => {
+    const c = checksFor(loadChecks(), checkKey);
+    app.querySelectorAll('[data-ing]').forEach((li) => li.classList.toggle('checked', c.ing.includes(Number(li.dataset.ing))));
+    app.querySelectorAll('.steps [data-step]').forEach((li) => li.classList.toggle('checked', c.steps.includes(Number(li.dataset.step))));
+    const bar = $('#checks-bar');
+    if (bar) bar.hidden = !c.ing.length && !c.steps.length;
+  };
+  app.querySelector('.recipe').addEventListener('click', (e) => {
+    const chip = e.target.closest('.timer-chip');
+    if (chip) { addTimer(chip.dataset.label, Number(chip.dataset.timer)); return; }
+    if (e.target.closest('button, a, input')) return;
+    const li = e.target.closest('.checkable');
+    if (!li) return;
+    const kind = li.dataset.ing != null ? 'ing' : 'steps';
+    saveChecks(toggleCheck(loadChecks(), checkKey, kind, Number(li.dataset.ing ?? li.dataset.step)));
+    drawChecks();
+  });
+  const clearBtn = $('#clear-checks');
+  if (clearBtn) clearBtn.onclick = () => { saveChecks(clearChecks(loadChecks(), checkKey)); drawChecks(); };
   const setServings = (n, opts) => {
     servings = Math.max(1, Math.min(100, Math.round(n)));
     drawIngredients(opts);
@@ -1534,8 +1715,10 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
   });
 
   // Zeitstempel bei den Schritten: zum passenden Video und dort an die Stelle springen.
-  app.querySelectorAll('.seek').forEach((b) => {
-    b.onclick = () => showMedia(b.dataset.video, Number(b.dataset.t));
+  // Die Schritte werden bei jeder Portionenänderung neu gezeichnet, darum hängt der Klick am Ganzen.
+  stepList?.addEventListener('click', (e) => {
+    const b = e.target.closest('.seek');
+    if (b) showMedia(b.dataset.video, Number(b.dataset.t));
   });
 
   if (!own) {
@@ -3987,6 +4170,7 @@ function blobToDataUrl(blob) {
 // ---------- Start ----------
 
 window.addEventListener('hashchange', render);
+drawTimers();
 
 if (isConfigured) {
   supabase.auth.onAuthStateChange((event, newSession) => {
