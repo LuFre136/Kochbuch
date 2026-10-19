@@ -18,8 +18,11 @@ export const HELP = [
   },
   {
     id: 'beimkochen',
-    title: 'Beim Kochen: Haken, Timer und Mengen',
+    title: 'Kochmodus, Haken, Timer und Mengen',
     lines: [
+      '„Kochen“ im Rezept öffnet den Kochmodus: zuerst die Zutaten, dann jeder Schritt groß auf einer eigenen Seite. Wische oder tippe auf „Weiter“ und „Zurück“.',
+      'Solange der Kochmodus offen ist, bleibt das Display an. Hat ein Schritt einen Zeitstempel, öffnet „Video ab …“ das Video unten auf der Seite.',
+      'Auf der letzten Seite speichert „Fertig, heute gekocht“ das Datum als „zuletzt gekocht“. Öffnest du den Kochmodus wieder, geht es beim Schritt nach deinem letzten Haken weiter.',
       'Tippe im Rezept auf eine Zutat oder einen Schritt, um sie durchzustreichen. Ein zweiter Tipp nimmt den Haken zurück.',
       'Die Haken bleiben auf diesem Gerät stehen, auch wenn du die App schließt. Nach 12 Stunden ohne neuen Haken beginnt das Rezept wieder leer, oder du tippst auf „Haken entfernen“.',
       'Zeitangaben in den Schritten wie „20 Minuten“ sind eingerahmt. Ein Tipp darauf startet einen Timer; bei einer Spanne wie „10–15 Minuten“ läuft er auf den kleineren Wert.',

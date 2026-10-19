@@ -231,6 +231,161 @@ function stepTextHtml(text, label, amounts = [], amountOf = null) {
   }).join('');
 }
 
+// ---------- Kochmodus ----------
+// Eine Seite über dem ganzen Bildschirm: erst die Zutaten, dann je Schritt eine Seite in
+// großer Schrift, zum Schluss "Fertig". Solange sie offen ist, bleibt das Display an.
+
+let cookMode = null;
+
+async function keepScreenOn() {
+  if (!cookMode) return;
+  try {
+    cookMode.lock = await navigator.wakeLock.request('screen');
+    cookMode.lock.addEventListener?.('release', () => { if (cookMode) cookMode.lock = null; });
+  } catch {
+    cookMode.lock = null;
+    const hint = cookMode.panel.querySelector('.cook-wake');
+    if (hint) hint.hidden = false;
+  }
+}
+
+// Gibt das Display frei, wenn man die App verlässt; beim Zurückkommen wird neu gesperrt.
+document.addEventListener('visibilitychange', () => {
+  if (cookMode && document.visibilityState === 'visible' && !cookMode.lock) keepScreenOn();
+});
+window.addEventListener('hashchange', () => closeCookMode());
+document.addEventListener('keydown', (e) => {
+  if (!cookMode) return;
+  if (e.key === 'Escape') closeCookMode();
+  if (e.key === 'ArrowRight') cookMode.go(1);
+  if (e.key === 'ArrowLeft') cookMode.go(-1);
+});
+
+function closeCookMode() {
+  if (!cookMode) return;
+  const { panel, lock, onClose } = cookMode;
+  cookMode = null;
+  lock?.release?.().catch(() => {});
+  panel.classList.remove('open');
+  setTimeout(() => panel.remove(), 300);
+  document.body.classList.remove('cooking');
+  if (!document.querySelector('dialog[open]')) document.documentElement.classList.remove('sheet-open');
+  onClose?.();
+}
+
+function openCookMode(r, { servings, own, videos = [], onClose }) {
+  closeCookMode();
+  const factor = servings / r.servings;
+  const stepQty = stepAmounts(r.steps.map(stepText), r.ingredients);
+  const amountOf = showStepAmounts() ? ({ ing, share }) => formatQuantity(r.ingredients[ing], factor * share) : null;
+  // Seiten: Zutaten (falls vorhanden), jeder Schritt, Fertig.
+  const pages = [
+    ...(r.ingredients.length ? [{ kind: 'ing' }] : []),
+    ...r.steps.map((s, i) => ({ kind: 'step', i, s })),
+    { kind: 'done' },
+  ];
+  const checks = () => checksFor(loadChecks(), r.id);
+  // Wer schon Schritte abgehakt hat, landet beim Schritt nach dem letzten Haken.
+  const done = checks().steps;
+  const resume = done.length ? pages.findIndex((p) => p.kind === 'step' && p.i === Math.max(...done) + 1) : -1;
+  let at = Math.max(0, resume);
+
+  const panel = document.createElement('section');
+  panel.className = 'cook-mode';
+  panel.setAttribute('role', 'dialog');
+  panel.setAttribute('aria-label', `Kochmodus: ${r.title}`);
+  panel.innerHTML = `<header class="cook-head">
+      <button type="button" class="icon-btn" data-close aria-label="Kochmodus beenden">←</button>
+      <div><h2>${esc(r.title)}</h2><p class="cook-at" aria-live="polite"></p></div>
+    </header>
+    <p class="hint cook-wake" hidden>Dieses Gerät lässt das Display hier nicht dauerhaft an. Tippe ab und zu auf den Bildschirm.</p>
+    <div class="cook-page"></div>
+    <div class="cook-video" hidden></div>
+    <nav class="cook-nav">
+      <button type="button" class="btn" data-go="-1">‹ Zurück</button>
+      <button type="button" class="btn primary" data-go="1">Weiter ›</button>
+    </nav>`;
+  document.body.append(panel);
+  document.body.classList.add('cooking');
+  document.documentElement.classList.add('sheet-open');
+  requestAnimationFrame(() => panel.classList.add('open'));
+  const page = panel.querySelector('.cook-page');
+  const videoBox = panel.querySelector('.cook-video');
+  const stepCount = r.steps.length;
+
+  const closeVideo = () => { videoBox.hidden = true; videoBox.innerHTML = ''; };
+  const draw = () => {
+    const p = pages[at];
+    const c = checks();
+    panel.querySelector('.cook-at').textContent = p.kind === 'ing' ? `Zutaten · ${servings} ${servings === 1 ? 'Portion' : 'Portionen'}`
+      : p.kind === 'step' ? `Schritt ${p.i + 1} von ${stepCount}` : 'Fertig';
+    if (p.kind === 'ing') {
+      page.innerHTML = `<ul class="ingredients cook-ings">${r.ingredients.map((i, ii) => `<li class="checkable${c.ing.includes(ii) ? ' checked' : ''}" data-ing="${ii}">
+        <span class="qty">${esc(formatQuantity(i, factor))}</span><span>${ingredientLabel(i)}</span></li>`).join('')}</ul>`;
+    } else if (p.kind === 'step') {
+      const v = stepVideo(p.s, videos);
+      const t = v ? stepTime(p.s) : null;
+      page.innerHTML = `<p class="cook-step checkable${c.steps.includes(p.i) ? ' checked' : ''}" data-step="${p.i}">${stepTextHtml(stepText(p.s), `${r.title} · Schritt ${p.i + 1}`, stepQty[p.i], amountOf)}</p>
+        ${t != null ? `<button type="button" class="btn small cook-seek" data-t="${t}" data-video="${esc(v.key)}">${symbol('video')}Video ab ${formatTime(t)}</button>` : ''}
+        <p class="hint">Tippe auf den Text, um den Schritt abzuhaken.</p>`;
+    } else {
+      page.innerHTML = `<div class="cook-done">${symbol('cooked')}<p>Guten Appetit!</p>
+        ${own && cookedColumn ? '<button type="button" class="btn primary" data-cooked>Fertig, heute gekocht</button>' : ''}
+        <button type="button" class="btn" data-close>Kochmodus beenden</button></div>`;
+    }
+    panel.querySelector('[data-go="-1"]').disabled = at === 0;
+    const next = panel.querySelector('[data-go="1"]');
+    next.hidden = at === pages.length - 1;
+    page.scrollTop = 0;
+  };
+  const go = (d) => {
+    const n = at + d;
+    if (n < 0 || n >= pages.length) return;
+    at = n;
+    closeVideo();
+    draw();
+  };
+
+  panel.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-close]')) { closeCookMode(); return; }
+    const nav = e.target.closest('[data-go]');
+    if (nav) { go(Number(nav.dataset.go)); return; }
+    const chip = e.target.closest('.timer-chip');
+    if (chip) { addTimer(chip.dataset.label, Number(chip.dataset.timer)); return; }
+    const seek = e.target.closest('.cook-seek');
+    if (seek) {
+      const v = videos.find((x) => x.key === seek.dataset.video);
+      if (!v) return;
+      videoBox.innerHTML = `<div class="cook-video-head"><span>Video</span><button type="button" class="icon-btn" data-video-close aria-label="Video schließen">×</button></div>
+        <div class="video${v.vertical ? ' vertical' : ''}"><iframe src="${esc(embedUrl(v, location.origin, Number(seek.dataset.t)))}" title="Video zum Schritt"
+          allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`;
+      videoBox.hidden = false;
+      return;
+    }
+    if (e.target.closest('[data-video-close]')) { closeVideo(); return; }
+    if (e.target.closest('[data-cooked]')) {
+      const day = today();
+      const { error } = await supabase.from('recipes').update({ last_cooked: day }).eq('id', r.id);
+      if (error) { toast(error.message); return; }
+      r.last_cooked = day;
+      toast('Als heute gekocht gespeichert');
+      closeCookMode();
+      return;
+    }
+    if (e.target.closest('button, a, input')) return;
+    const li = e.target.closest('.checkable');
+    if (!li) return;
+    const kind = li.dataset.ing != null ? 'ing' : 'steps';
+    saveChecks(toggleCheck(loadChecks(), r.id, kind, Number(li.dataset.ing ?? li.dataset.step)));
+    li.classList.toggle('checked');
+  });
+  enableRecipeSwipe(page, go);
+
+  cookMode = { panel, lock: null, go, onClose };
+  draw();
+  keepScreenOn();
+}
+
 async function loadRecipes(force = false) {
   if (recipes && !force) return recipes;
   const { data, error } = await supabase.from('recipes').select('*').eq('owner_id', session.user.id);
@@ -1516,8 +1671,9 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
         ${sources.map(([u, href]) => `<li><a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(hostOf(u))}</a></li>`).join('')}
       </ul></section>` : ''}
 
-      <div class="actions">${own ? `
-        <button class="btn primary" id="plan-btn">Einplanen</button>
+      <div class="actions">
+        ${r.steps.length || r.ingredients.length ? `<button class="btn primary" id="cook-btn">${symbol('pot')}Kochen</button>` : ''}${own ? `
+        <button class="btn" id="plan-btn">Einplanen</button>
         <a class="btn" href="#/r/${r.id}/bearbeiten">Bearbeiten</a>
         <button class="btn" id="share">Teilen</button>
         <button class="btn danger" id="del">Löschen</button>` : session
@@ -1720,6 +1876,9 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
     const b = e.target.closest('.seek');
     if (b) showMedia(b.dataset.video, Number(b.dataset.t));
   });
+
+  const cookBtn = $('#cook-btn');
+  if (cookBtn) cookBtn.onclick = () => openCookMode(r, { servings, own, videos, onClose: drawChecks });
 
   if (!own) {
     if (session) $('#copy').onclick = (e) => copyRecipe(r, e.target);

@@ -734,3 +734,35 @@ body.has-timers .toast { bottom: calc(150px + env(safe-area-inset-bottom)); }
 .step-qty { color: var(--muted); font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .section-head .check.small { margin: 0; font-size: 0.85rem; align-items: center; }
 .section-head .check.small input { margin-top: 0; }
+
+/* Kochmodus: ganze Seite, große Schrift, ein Schritt pro Seite */
+.cook-mode {
+  position: fixed; inset: 0; z-index: 25; display: flex; flex-direction: column; gap: 12px;
+  padding: calc(10px + env(safe-area-inset-top)) 16px calc(12px + env(safe-area-inset-bottom));
+  background: var(--bg); transform: translateX(100%); transition: transform 0.25s ease;
+}
+.cook-mode.open { transform: none; }
+@media (prefers-reduced-motion: reduce) { .cook-mode { transition: none; } }
+.cook-head { display: flex; align-items: center; gap: 8px; }
+.cook-head h2 { font-size: 1.05rem; line-height: 1.3; }
+.cook-at { margin: 0; color: var(--muted); font-size: 0.9rem; font-weight: 600; }
+.cook-wake { margin: 0; }
+.cook-page { flex: 1; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; padding: 8px 2px; }
+.cook-step { font-size: 1.75rem; line-height: 1.4; margin: 8px 0 20px; }
+.cook-step .timer-chip { padding: 0 10px; }
+.cook-ings { font-size: 1.3rem; }
+.cook-ings li { grid-template-columns: 7.5rem 1fr; padding: 12px 0; }
+.cook-seek { margin-bottom: 12px; }
+.cook-done { display: grid; justify-items: center; gap: 14px; padding-top: 12vh; text-align: center; font-size: 1.3rem; }
+.cook-done .sym { width: 4rem; height: 4rem; margin: 0; color: var(--accent); stroke-width: 1.3; }
+.cook-done p { margin: 0; font-weight: 600; }
+.cook-nav { display: flex; gap: 10px; }
+.cook-nav .btn { flex: 1; justify-content: center; min-height: 52px; font-size: 1.1rem; }
+.cook-nav .btn[hidden] { display: none; }
+.cook-video { border: 1px solid var(--border); border-radius: var(--radius); padding: 6px; background: var(--surface); }
+.cook-video[hidden] { display: none; }
+.cook-video-head { display: flex; justify-content: space-between; align-items: center; padding-left: 8px; font-weight: 600; }
+.cook-video .video { max-height: 38vh; }
+.cook-video .video iframe { max-height: 38vh; }
+body.cooking .timers { z-index: 30; bottom: calc(80px + env(safe-area-inset-bottom)); }
+body.cooking .toast { z-index: 35; }

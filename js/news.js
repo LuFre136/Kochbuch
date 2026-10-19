@@ -5,6 +5,13 @@
 
 export const NEWS = [
   {
+    version: '2026-10-19-kochmodus',
+    title: 'Kochmodus',
+    lines: [
+      { text: '„Kochen“ im Rezept zeigt jeden Schritt groß auf einer eigenen Seite, und das Display bleibt dabei an.', ziel: '#/hilfe/beimkochen' },
+    ],
+  },
+  {
     version: '2026-10-19-mengen-schritte',
     title: 'Mengen in den Schritten',
     lines: [
