@@ -4,7 +4,7 @@ const CACHE = 'kochbuch-v31';
 const SHELL = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
   'js/app.js', 'js/supabase.js', 'js/config.js', 'js/ingredients.js', 'js/pantry.js', 'js/shopping.js', 'js/season.js', 'js/video.js', 'js/categories.js', 'js/places.js', 'js/links.js',
-  'js/alternatives.js', 'js/combine.js', 'js/sorting.js', 'js/help.js', 'js/news.js',
+  'js/alternatives.js', 'js/combine.js', 'js/sorting.js', 'js/help.js', 'js/news.js', 'js/cooking.js',
   'icons/icon-192.png', 'icons/apple-touch-icon.png',
 ];
 

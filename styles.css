@@ -700,3 +700,34 @@ dialog.sheet.full {
 .parse-preview li.dragging .ing-row { box-shadow: var(--shadow); border-radius: 8px; }
 .parse-preview li.dragging .drag-handle { cursor: grabbing; color: var(--accent); }
 .sheet-form h2:focus { outline: none; }
+
+/* Beim Kochen: Haken und Timer */
+.checkable { cursor: pointer; -webkit-tap-highlight-color: transparent; transition: opacity 0.15s; }
+.checkable.checked { opacity: 0.45; text-decoration: line-through; text-decoration-thickness: 1.5px; }
+.checks-bar { margin: 4px 0 0; }
+.timer-chip {
+  display: inline-flex; align-items: center; gap: 3px; padding: 0 7px; margin: 0 1px;
+  border: 1px solid var(--accent); border-radius: 999px; background: transparent; color: var(--accent);
+  font: inherit; font-weight: 600; cursor: pointer; vertical-align: baseline; text-decoration: inherit;
+}
+.timer-chip .sym { width: 0.95em; height: 0.95em; margin: 0; }
+.timers {
+  position: fixed; left: 8px; right: 8px; z-index: 15;
+  bottom: calc(70px + env(safe-area-inset-bottom));
+  display: grid; gap: 6px; max-width: 640px; margin: 0 auto;
+}
+.timer {
+  display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 12px;
+  background: var(--text); color: var(--bg); border-radius: 999px; box-shadow: var(--shadow);
+}
+.timer .sym { width: 18px; height: 18px; margin: 0; }
+.timer-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.85rem; }
+.timer-left { font-weight: 700; font-variant-numeric: tabular-nums; }
+.timer .icon-btn { color: var(--bg); min-width: 36px; height: 36px; }
+.timer .icon-btn:hover, .timer .icon-btn:focus-visible { background: color-mix(in srgb, var(--bg) 20%, transparent); color: var(--bg); }
+.timer.paused .timer-left { opacity: 0.6; }
+.timer.ringing { background: var(--accent); color: var(--accent-text); animation: timer-blink 1s steps(2, start) infinite; }
+.timer.ringing .icon-btn { color: var(--accent-text); font-weight: 700; }
+@keyframes timer-blink { 50% { background: var(--danger); } }
+body.has-timers main { padding-bottom: calc(140px + env(safe-area-inset-bottom)); }
+body.has-timers .toast { bottom: calc(150px + env(safe-area-inset-bottom)); }

@@ -5,6 +5,14 @@
 
 export const NEWS = [
   {
+    version: '2026-10-19-haken-timer',
+    title: 'Abhaken und Timer beim Kochen',
+    lines: [
+      { text: 'Tippe im Rezept auf eine Zutat oder einen Schritt, um sie beim Kochen durchzustreichen.', ziel: '#/hilfe/beimkochen' },
+      { text: 'Zeitangaben wie „20 Minuten“ in den Schritten starten mit einem Tipp einen Timer. Laufende Timer stehen unten auf jeder Seite.', ziel: '#/hilfe/beimkochen' },
+    ],
+  },
+  {
     version: '2026-10-19-zutaten-sortieren',
     title: 'Zutaten löschen und verschieben',
     lines: [
