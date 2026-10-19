@@ -27,3 +27,23 @@ test('nur Orte, die es noch gibt', () => {
 test('Standard-Orte', () => {
   assert.deepEqual(DEFAULT_PLACES.map((p) => p.name), ['Supermarkt', 'Drogeriemarkt', 'Markt', 'Bäcker', 'Baumarkt', 'Sonstige']);
 });
+
+import { categoryOrder, walkKey } from '../js/places.js';
+
+test('Ladenweg: eigene Reihenfolge, Neues hinten, Unbekanntes fällt weg', () => {
+  const all = ['Obst', 'Gemüse', 'Brot', 'Käse'];
+  assert.deepEqual(categoryOrder(null, all), all);
+  assert.deepEqual(categoryOrder(['Brot', 'Gibtsnicht', 'Obst', 'Brot'], all), ['Brot', 'Obst', 'Gemüse', 'Käse']);
+});
+
+test('Ladenweg: erst der Ort, dann die Kategorie in dessen Reihenfolge', () => {
+  const orders = { supermarkt: ['Obst', 'Brot'], markt: ['Brot', 'Obst'] };
+  const orderOf = (id) => orders[id] ?? [];
+  const placeOrder = ['supermarkt', 'markt'];
+  assert.deepEqual(walkKey(['markt'], 'Obst', placeOrder, orderOf), { place: 'markt', rank: [1, 1] });
+  // Mehrere Orte: der erste in der Orte-Reihenfolge zählt.
+  assert.deepEqual(walkKey(['markt', 'supermarkt'], 'Brot', placeOrder, orderOf), { place: 'supermarkt', rank: [0, 1] });
+  // Mit Ort-Filter gilt dessen Reihenfolge.
+  assert.deepEqual(walkKey(['markt', 'supermarkt'], 'Brot', placeOrder, orderOf, 'markt'), { place: 'markt', rank: [0, 0] });
+  assert.deepEqual(walkKey([], 'Käse', placeOrder, orderOf).rank, [0, 2]);
+});

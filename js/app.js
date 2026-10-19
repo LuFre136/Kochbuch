@@ -5,10 +5,11 @@ import {
 import { suggestRecipes, STAPLES } from './pantry.js';
 import {
   additionsFromPlan, findConflict, mergeInto, removeRecipe, removePlanEntry, recipesOnList, plannedIds, formatItemQuantity,
+  frequentSuggestions,
 } from './shopping.js';
 import { PRODUCE, MONTHS, seasonOf, inSeason, seasonalRecipes } from './season.js';
-import { CATEGORIES, guessCategory, categoryKey, categoryRank } from './categories.js';
-import { DEFAULT_PLACES, guessPlaces } from './places.js';
+import { CATEGORIES, guessCategory, categoryKey } from './categories.js';
+import { DEFAULT_PLACES, guessPlaces, categoryOrder, walkKey } from './places.js';
 import { linkify } from './links.js';
 import {
   videoOf, videosOf, videoKey, embedUrl, seekTo, askPlayerState, pausePlayer, playMuted, playerState, isPlayerMessage, stepText, stepTime, stepVideo,
@@ -18,7 +19,9 @@ import {
   pairOf, alternativeIds, alternativeGroup, suggestAlternatives, relatedAlternatives,
   filterByTags, tagMatches,
 } from './alternatives.js';
-import { SORTS, sortRecipes, formatCooked, cookedFromPlan } from './sorting.js';
+import {
+  SORTS, sortRecipes, formatCooked, cookedFromPlan, TIME_LIMITS, filterByTime,
+} from './sorting.js';
 import { HELP, helpFor, helpTopic } from './help.js';
 import { NEWS, newsSince, latestVersion } from './news.js';
 import {
@@ -42,6 +45,8 @@ let categoriesSaved = true; // false, solange kategorien.sql nicht ausgeführt w
 let places = null; // eigene Einkaufsorte [{ id, name }]; null = noch nicht geladen
 let placesTable = true; // false, solange orte.sql nicht ausgeführt wurde
 let placesSaved = true; // false, solange ingredient_categories keine Spalte places hat
+let frequentTable = true; // false, solange haeufig.sql nicht ausgeführt wurde
+let walkColumn = true; // false, solange shopping_places keine Spalte category_order hat (ladenweg.sql)
 let namesSaved = true; // false, solange ingredient_categories keine Spalte name hat (zutaten.sql)
 let takenName = ''; // Name aus der Registrierung, den inzwischen jemand anderes hat
 let myName; // Benutzername: undefined = noch nicht geladen, null = fehlt noch, false = benutzername.sql nicht eingerichtet
@@ -52,6 +57,7 @@ let secretColumn = true; // false, solange familiengeheimnis.sql nicht ausgefüh
 let pendingNew = null; // Vorbelegung für ein neues Rezept, z. B. aus dem Kombinieren
 let activeTag = null;
 let listSort = 'name';
+let timeLimit = null; // Filter nach Zeit: null, 15, 30, 45, 60 oder 'none' (ohne Zeitangabe)
 let recoveringPassword = false;
 
 const collator = new Intl.Collator('de', { sensitivity: 'base' });
@@ -95,6 +101,103 @@ function toast(message) {
   el.textContent = message;
   document.body.append(el);
   setTimeout(() => el.remove(), 3500);
+}
+
+// ---------- Offline ----------
+// Ohne Netz liefert der Service Worker die zuletzt geladenen Daten und meldet, von wann sie
+// sind. Dann steht oben ein Hinweis, und was das Internet braucht, ist gesperrt. Haken auf
+// der Einkaufsliste werden gemerkt und nachgereicht.
+
+let offlineAt = null; // Zeitpunkt der angezeigten Daten, solange die App offline ist
+
+const isNetworkError = (err) => !navigator.onLine || /fetch|network|load failed|offline/i.test(err?.message ?? '');
+
+function formatSaved(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const time = d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  if (d.toLocaleDateString('sv-SE') === today()) return `heute ${time}`;
+  return `${d.toLocaleDateString('de-DE', { day: 'numeric', month: 'numeric' })} ${time}`;
+}
+
+function setOffline(at) {
+  if (at && (!offlineAt || at < offlineAt)) offlineAt = at;
+  document.body.classList.add('offline');
+  let bar = document.getElementById('offline-bar');
+  if (!bar) {
+    bar = document.createElement('p');
+    bar.id = 'offline-bar';
+    bar.className = 'offline-bar';
+    bar.setAttribute('role', 'status');
+    document.querySelector('.topbar').after(bar);
+  }
+  bar.textContent = offlineAt ? `Offline · Stand von ${formatSaved(offlineAt)}` : 'Offline';
+}
+
+function setOnline() {
+  if (!document.body.classList.contains('offline')) return;
+  offlineAt = null;
+  document.body.classList.remove('offline');
+  document.getElementById('offline-bar')?.remove();
+  flushPendingChecks().then(() => { if (session) render(); });
+}
+
+navigator.serviceWorker?.addEventListener('message', (e) => {
+  if (e.data?.type === 'kochbuch-offline') setOffline(e.data.at);
+});
+window.addEventListener('offline', () => setOffline());
+window.addEventListener('online', setOnline);
+if (!navigator.onLine) setOffline();
+
+// Was ohne Netz nicht geht, ist gesperrt: ein Tipp darauf erklärt es nur.
+const NEEDS_NET = '.needs-net, .swipe-btn, [data-del], #add-item button, #list-settings button, #list-recipes button, #list-select';
+document.addEventListener('click', (e) => {
+  if (!document.body.classList.contains('offline') || !e.target.closest(NEEDS_NET)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  toast('Dafür braucht die App Internet.');
+}, true);
+document.addEventListener('submit', (e) => {
+  if (!document.body.classList.contains('offline') || e.target.id !== 'add-item') return;
+  e.preventDefault();
+  e.stopPropagation();
+  toast('Dafür braucht die App Internet.');
+}, true);
+
+// Haken auf der Einkaufsliste, die noch nicht gespeichert werden konnten: { [Eintrag]: true/false }
+const loadPendingChecks = () => {
+  try { return JSON.parse(localStorage.getItem('kochbuch.pendingChecks') || '{}') || {}; } catch { return {}; }
+};
+function savePendingChecks(p) {
+  try { localStorage.setItem('kochbuch.pendingChecks', JSON.stringify(p)); } catch { /* privater Modus */ }
+}
+
+async function flushPendingChecks() {
+  const pending = loadPendingChecks();
+  for (const [id, checked] of Object.entries(pending)) {
+    const { error } = await supabase.from('shopping_items').update({ checked }).eq('id', id);
+    if (error && isNetworkError(error)) return;
+    delete pending[id];
+    savePendingChecks(pending);
+  }
+}
+
+// Titelbilder aller Rezepte einmal vorladen, damit sie auch offline da sind (der Service
+// Worker hebt jedes geladene Bild auf). Nicht im Mobilfunk, soweit der Browser das verrät.
+let imagesWarmed = false;
+function warmImages(list) {
+  const conn = navigator.connection;
+  if (imagesWarmed || !navigator.onLine || !navigator.serviceWorker?.controller || conn?.saveData || conn?.type === 'cellular') return;
+  imagesWarmed = true;
+  const urls = list.filter((r) => r.images?.[0]).map((r) => imageUrl(r.images[0]));
+  const next = () => {
+    const url = urls.shift();
+    if (!url || !navigator.onLine) return;
+    const img = new Image();
+    img.onload = img.onerror = () => setTimeout(next, 50);
+    img.src = url;
+  };
+  (window.requestIdleCallback ?? setTimeout)(next);
 }
 
 // ---------- Timer ----------
@@ -231,6 +334,161 @@ function stepTextHtml(text, label, amounts = [], amountOf = null) {
   }).join('');
 }
 
+// ---------- Kochmodus ----------
+// Eine Seite über dem ganzen Bildschirm: erst die Zutaten, dann je Schritt eine Seite in
+// großer Schrift, zum Schluss "Fertig". Solange sie offen ist, bleibt das Display an.
+
+let cookMode = null;
+
+async function keepScreenOn() {
+  if (!cookMode) return;
+  try {
+    cookMode.lock = await navigator.wakeLock.request('screen');
+    cookMode.lock.addEventListener?.('release', () => { if (cookMode) cookMode.lock = null; });
+  } catch {
+    cookMode.lock = null;
+    const hint = cookMode.panel.querySelector('.cook-wake');
+    if (hint) hint.hidden = false;
+  }
+}
+
+// Gibt das Display frei, wenn man die App verlässt; beim Zurückkommen wird neu gesperrt.
+document.addEventListener('visibilitychange', () => {
+  if (cookMode && document.visibilityState === 'visible' && !cookMode.lock) keepScreenOn();
+});
+window.addEventListener('hashchange', () => closeCookMode());
+document.addEventListener('keydown', (e) => {
+  if (!cookMode) return;
+  if (e.key === 'Escape') closeCookMode();
+  if (e.key === 'ArrowRight') cookMode.go(1);
+  if (e.key === 'ArrowLeft') cookMode.go(-1);
+});
+
+function closeCookMode() {
+  if (!cookMode) return;
+  const { panel, lock, onClose } = cookMode;
+  cookMode = null;
+  lock?.release?.().catch(() => {});
+  panel.classList.remove('open');
+  setTimeout(() => panel.remove(), 300);
+  document.body.classList.remove('cooking');
+  if (!document.querySelector('dialog[open]')) document.documentElement.classList.remove('sheet-open');
+  onClose?.();
+}
+
+function openCookMode(r, { servings, own, videos = [], onClose }) {
+  closeCookMode();
+  const factor = servings / r.servings;
+  const stepQty = stepAmounts(r.steps.map(stepText), r.ingredients);
+  const amountOf = showStepAmounts() ? ({ ing, share }) => formatQuantity(r.ingredients[ing], factor * share) : null;
+  // Seiten: Zutaten (falls vorhanden), jeder Schritt, Fertig.
+  const pages = [
+    ...(r.ingredients.length ? [{ kind: 'ing' }] : []),
+    ...r.steps.map((s, i) => ({ kind: 'step', i, s })),
+    { kind: 'done' },
+  ];
+  const checks = () => checksFor(loadChecks(), r.id);
+  // Wer schon Schritte abgehakt hat, landet beim Schritt nach dem letzten Haken.
+  const done = checks().steps;
+  const resume = done.length ? pages.findIndex((p) => p.kind === 'step' && p.i === Math.max(...done) + 1) : -1;
+  let at = Math.max(0, resume);
+
+  const panel = document.createElement('section');
+  panel.className = 'cook-mode';
+  panel.setAttribute('role', 'dialog');
+  panel.setAttribute('aria-label', `Kochmodus: ${r.title}`);
+  panel.innerHTML = `<header class="cook-head">
+      <button type="button" class="icon-btn" data-close aria-label="Kochmodus beenden">←</button>
+      <div><h2>${esc(r.title)}</h2><p class="cook-at" aria-live="polite"></p></div>
+    </header>
+    <p class="hint cook-wake" hidden>Dieses Gerät lässt das Display hier nicht dauerhaft an. Tippe ab und zu auf den Bildschirm.</p>
+    <div class="cook-page"></div>
+    <div class="cook-video" hidden></div>
+    <nav class="cook-nav">
+      <button type="button" class="btn" data-go="-1">‹ Zurück</button>
+      <button type="button" class="btn primary" data-go="1">Weiter ›</button>
+    </nav>`;
+  document.body.append(panel);
+  document.body.classList.add('cooking');
+  document.documentElement.classList.add('sheet-open');
+  requestAnimationFrame(() => panel.classList.add('open'));
+  const page = panel.querySelector('.cook-page');
+  const videoBox = panel.querySelector('.cook-video');
+  const stepCount = r.steps.length;
+
+  const closeVideo = () => { videoBox.hidden = true; videoBox.innerHTML = ''; };
+  const draw = () => {
+    const p = pages[at];
+    const c = checks();
+    panel.querySelector('.cook-at').textContent = p.kind === 'ing' ? `Zutaten · ${servings} ${servings === 1 ? 'Portion' : 'Portionen'}`
+      : p.kind === 'step' ? `Schritt ${p.i + 1} von ${stepCount}` : 'Fertig';
+    if (p.kind === 'ing') {
+      page.innerHTML = `<ul class="ingredients cook-ings">${r.ingredients.map((i, ii) => `<li class="checkable${c.ing.includes(ii) ? ' checked' : ''}" data-ing="${ii}">
+        <span class="qty">${esc(formatQuantity(i, factor))}</span><span>${ingredientLabel(i)}</span></li>`).join('')}</ul>`;
+    } else if (p.kind === 'step') {
+      const v = stepVideo(p.s, videos);
+      const t = v ? stepTime(p.s) : null;
+      page.innerHTML = `<p class="cook-step checkable${c.steps.includes(p.i) ? ' checked' : ''}" data-step="${p.i}">${stepTextHtml(stepText(p.s), `${r.title} · Schritt ${p.i + 1}`, stepQty[p.i], amountOf)}</p>
+        ${t != null ? `<button type="button" class="btn small cook-seek" data-t="${t}" data-video="${esc(v.key)}">${symbol('video')}Video ab ${formatTime(t)}</button>` : ''}
+        <p class="hint">Tippe auf den Text, um den Schritt abzuhaken.</p>`;
+    } else {
+      page.innerHTML = `<div class="cook-done">${symbol('cooked')}<p>Guten Appetit!</p>
+        ${own && cookedColumn ? '<button type="button" class="btn primary" data-cooked>Fertig, heute gekocht</button>' : ''}
+        <button type="button" class="btn" data-close>Kochmodus beenden</button></div>`;
+    }
+    panel.querySelector('[data-go="-1"]').disabled = at === 0;
+    const next = panel.querySelector('[data-go="1"]');
+    next.hidden = at === pages.length - 1;
+    page.scrollTop = 0;
+  };
+  const go = (d) => {
+    const n = at + d;
+    if (n < 0 || n >= pages.length) return;
+    at = n;
+    closeVideo();
+    draw();
+  };
+
+  panel.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-close]')) { closeCookMode(); return; }
+    const nav = e.target.closest('[data-go]');
+    if (nav) { go(Number(nav.dataset.go)); return; }
+    const chip = e.target.closest('.timer-chip');
+    if (chip) { addTimer(chip.dataset.label, Number(chip.dataset.timer)); return; }
+    const seek = e.target.closest('.cook-seek');
+    if (seek) {
+      const v = videos.find((x) => x.key === seek.dataset.video);
+      if (!v) return;
+      videoBox.innerHTML = `<div class="cook-video-head"><span>Video</span><button type="button" class="icon-btn" data-video-close aria-label="Video schließen">×</button></div>
+        <div class="video${v.vertical ? ' vertical' : ''}"><iframe src="${esc(embedUrl(v, location.origin, Number(seek.dataset.t)))}" title="Video zum Schritt"
+          allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`;
+      videoBox.hidden = false;
+      return;
+    }
+    if (e.target.closest('[data-video-close]')) { closeVideo(); return; }
+    if (e.target.closest('[data-cooked]')) {
+      const day = today();
+      const { error } = await supabase.from('recipes').update({ last_cooked: day }).eq('id', r.id);
+      if (error) { toast(error.message); return; }
+      r.last_cooked = day;
+      toast('Als heute gekocht gespeichert');
+      closeCookMode();
+      return;
+    }
+    if (e.target.closest('button, a, input')) return;
+    const li = e.target.closest('.checkable');
+    if (!li) return;
+    const kind = li.dataset.ing != null ? 'ing' : 'steps';
+    saveChecks(toggleCheck(loadChecks(), r.id, kind, Number(li.dataset.ing ?? li.dataset.step)));
+    li.classList.toggle('checked');
+  });
+  enableRecipeSwipe(page, go);
+
+  cookMode = { panel, lock: null, go, onClose };
+  draw();
+  keepScreenOn();
+}
+
 async function loadRecipes(force = false) {
   if (recipes && !force) return recipes;
   const { data, error } = await supabase.from('recipes').select('*').eq('owner_id', session.user.id);
@@ -277,11 +535,13 @@ async function loadCategories() {
 // Eigene Einkaufsorte; wer noch keine hat, bekommt die Standard-Orte.
 async function loadPlaces() {
   if (places) return places;
-  const { data, error } = await supabase.from('shopping_places').select('id, name, position').order('position');
+  let { data, error } = await supabase.from('shopping_places').select('id, name, position, category_order').order('position');
+  walkColumn = !error;
+  if (error) ({ data, error } = await supabase.from('shopping_places').select('id, name, position').order('position'));
   placesTable = !error;
-  places = data?.length ? data.map(({ id, name }) => ({ id, name })) : DEFAULT_PLACES.map((p) => ({ ...p }));
+  places = data?.length ? data.map(({ id, name, category_order: order }) => ({ id, name, order: order ?? null })) : DEFAULT_PLACES.map((p) => ({ ...p, order: null }));
   if (placesTable && !data.length) {
-    const { error: e } = await supabase.from('shopping_places').insert(places.map((p, i) => ({ ...p, position: i })));
+    const { error: e } = await supabase.from('shopping_places').insert(places.map(({ id, name }, i) => ({ id, name, position: i })));
     if (e) console.warn(e);
   }
   return places;
@@ -289,6 +549,8 @@ async function loadPlaces() {
 
 const placeIds = () => (places ?? DEFAULT_PLACES).map((p) => p.id);
 const placeName = (id) => (places ?? DEFAULT_PLACES).find((p) => p.id === id)?.name;
+// Ladenweg eines Orts: alle Kategorien in seiner Reihenfolge.
+const walkOf = (id) => categoryOrder((places ?? []).find((p) => p.id === id)?.order, CATEGORIES);
 
 // Eigene Kategorie einer Zutat, sonst ein Vorschlag anhand des Namens.
 function categoryOf(name) {
@@ -455,6 +717,7 @@ async function render() {
     else if (first === 'verwalten') renderManage();
     else if (first === 'zutaten') await renderIngredients();
     else if (first === 'orte') await renderPlaces();
+    else if (first === 'ladenweg' && id) await renderWalk(id);
     else if (first === 'hilfe') renderHelp(id);
     else if (first === 'geteilt') await renderSharing();
     else if (first === 'plan') await renderPlan();
@@ -494,7 +757,7 @@ function renderNav() {
   const topic = helpFor(first, action);
   // "+ Rezept" steht nur auf der Übersicht; Abmelden liegt unter "Verwalten".
   nav.innerHTML = `
-    ${first ? '' : '<a class="btn primary small" href="#/neu">+ Rezept</a>'}
+    ${first ? '' : '<a class="btn primary small needs-net" href="#/neu">+ Rezept</a>'}
     ${topic ? '<button class="icon-btn" id="help-btn" aria-label="Hilfe zu dieser Seite" title="Hilfe zu dieser Seite">?</button>' : ''}
     <button class="icon-btn bell" id="bell" hidden>${BELL}<span class="badge" hidden></span></button>`;
   const help = $('#help-btn', nav);
@@ -871,7 +1134,7 @@ const PLACEHOLDER = `<div class="placeholder" aria-hidden="true">${symbol('pot')
 
 function renderTabbar(first) {
   if (!session) { tabbar.hidden = true; return; }
-  const active = { '': 'list', r: 'list', neu: 'list', kombinieren: 'list', kochen: 'pantry', saison: 'pantry', plan: 'plan', einkauf: 'shop', verwalten: 'manage', zutaten: 'manage', orte: 'manage', geteilt: 'manage', kochbuch: 'manage', hilfe: 'manage', liste: 'shop' }[first || ''];
+  const active = { '': 'list', r: 'list', neu: 'list', kombinieren: 'list', kochen: 'pantry', saison: 'pantry', plan: 'plan', einkauf: 'shop', verwalten: 'manage', zutaten: 'manage', orte: 'manage', ladenweg: 'manage', geteilt: 'manage', kochbuch: 'manage', hilfe: 'manage', liste: 'shop' }[first || ''];
   tabbar.hidden = false;
   tabbar.innerHTML = TABS.map(([key, href, label]) => `<a href="${href}" class="${key === active ? 'active' : ''}"${key === active ? ' aria-current="page"' : ''}>
     <svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[key]}</svg><span>${label}</span></a>`).join('');
@@ -958,6 +1221,7 @@ async function renderPantry() {
       ${sharedToggle(sharedBooks)}
     </div>
     <div id="pantry-tags"></div>
+    <div id="pantry-time"></div>
     <div id="suggestions"></div>`;
 
   const byId = new Map(all.map((r) => [r.id, r]));
@@ -976,11 +1240,12 @@ async function renderPantry() {
     const out = $('#suggestions');
     if (!state.items.length) {
       $('#pantry-tags').innerHTML = '';
+      $('#pantry-time').innerHTML = '';
       out.innerHTML = '<p class="hint">Gib ein, was du im Kühlschrank und Vorrat hast. Dann zeige ich dir, welche Rezepte du damit kochen kannst.</p>';
       return;
     }
     const found = suggestRecipes(all, state.items, { useStaples: state.useStaples });
-    const hits = tagFilter($('#pantry-tags'), found.map((h) => h.recipe), pantryTags, draw)(found);
+    const hits = timeFilter($('#pantry-time'), draw, (h) => h.recipe)(tagFilter($('#pantry-tags'), found.map((h) => h.recipe), pantryTags, draw)(found));
     if (!hits.length) {
       out.innerHTML = '<p class="hint">Kein Rezept passt dazu. Füge weitere Zutaten hinzu.</p>';
       return;
@@ -1017,6 +1282,32 @@ async function renderPantry() {
   $('#staples').onchange = (e) => { state.useStaples = e.target.checked; draw(); };
   bindSharedToggle(renderPantry);
   draw();
+}
+
+// Zeit-Chips über einer Liste. Liefert eine Funktion, die die Liste filtert und darunter
+// meldet, wie viele Rezepte ohne Zeitangabe dabei wegfallen (antippbar: zeigt genau die).
+function timeFilter(container, onChange, of = (x) => x) {
+  if (!container) return (list) => list;
+  container.innerHTML = `<div class="chips time-filter" role="group" aria-label="Zeit">${TIME_LIMITS.map(([m, label]) => `<button type="button" class="chip${timeLimit === m ? ' active' : ''}" data-limit="${m}" aria-pressed="${timeLimit === m}">${symbol('clock')}${label}</button>`).join('')}
+    ${timeLimit === 'none' ? '<button type="button" class="chip active" data-limit="none" aria-pressed="true">ohne Zeitangabe ×</button>' : ''}</div>
+    <p class="hint time-unknown" hidden></p>`;
+  container.querySelectorAll('[data-limit]').forEach((chip) => {
+    chip.onclick = () => {
+      const v = chip.dataset.limit === 'none' ? 'none' : Number(chip.dataset.limit);
+      timeLimit = timeLimit === v ? null : v;
+      onChange();
+    };
+  });
+  return (list) => {
+    const { shown, unknown } = filterByTime(list, timeLimit, of);
+    const note = container.querySelector('.time-unknown');
+    note.hidden = !unknown;
+    if (unknown) {
+      note.innerHTML = `<button type="button" class="link">${unknown === 1 ? '1 Rezept' : `${unknown} Rezepte`} ohne Zeitangabe ausgeblendet</button>`;
+      note.querySelector('button').onclick = () => { timeLimit = 'none'; onChange(); };
+    }
+    return shown;
+  };
 }
 
 // Tag-Filter für Trefferlisten: angeboten werden nur Tags, die in den Treffern vorkommen
@@ -1069,6 +1360,7 @@ async function renderSeason() {
       <h2>Passende Rezepte</h2>
       ${sharedToggle(sharedBooks)}
       <div id="season-tags"></div>
+      <div id="season-time"></div>
       <div id="season-results"></div>
     </section>
     <details class="year card-panel">
@@ -1106,7 +1398,7 @@ async function renderSeason() {
 
     const produce = st.focus.size ? current.filter((p) => st.focus.has(p.name)) : current;
     const found = seasonalRecipes(all, produce);
-    const hits = tagFilter($('#season-tags'), found.map((h) => h.recipe), st.tags, draw)(found);
+    const hits = timeFilter($('#season-time'), draw, (h) => h.recipe)(tagFilter($('#season-tags'), found.map((h) => h.recipe), st.tags, draw)(found));
     $('#season-results').innerHTML = hits.length ? `<div class="suggestions">${hits.map((h) => `<a class="suggestion${altStack(h.recipe)}" href="${recipeHref(h.recipe)}">
       ${h.recipe.images[0] ? `<img src="${esc(imageUrl(h.recipe.images[0]))}" alt="" loading="lazy">` : PLACEHOLDER}
       <div><h3>${esc(h.recipe.title)}${altMark(h.recipe, byId)}</h3>${fromLine(h.recipe)}<p class="ok">Saison: ${h.matches.map((p) => esc(p.name)).join(', ')}</p></div></a>`).join('')}</div>`
@@ -1133,6 +1425,7 @@ async function renderList() {
   }
   const tags = [...new Set(all.flatMap((r) => r.tags))].sort(collator.compare);
   if (activeTag && !tags.includes(activeTag)) activeTag = null;
+  warmImages(all);
   app.innerHTML = `
     
     <div class="search">
@@ -1142,6 +1435,7 @@ async function renderList() {
       </select>
     </div>
     ${tags.length ? `<div class="chips">${tags.map((t) => `<button class="chip${t === activeTag ? ' active' : ''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}</div>` : ''}
+    <div id="list-time"></div>
     <div id="results" class="grid"></div>`;
 
   const byId = new Map(all.map((r) => [r.id, r]));
@@ -1150,7 +1444,7 @@ async function renderList() {
     const q = listQuery.trim().toLowerCase();
     const found = all.filter((r) => (!activeTag || r.tags.includes(activeTag))
       && (!q || [r.title, r.description, ...r.tags].some((s) => s.toLowerCase().includes(q))));
-    const shown = sortRecipes(found, listSort, collator.compare);
+    const shown = sortRecipes(timeFilter($('#list-time'), draw)(found), listSort, collator.compare);
     results.innerHTML = shown.length ? shown.map((r) => `<div class="swipe" data-id="${r.id}">
         <div class="swipe-actions start"><button type="button" class="swipe-btn danger" data-act="delete">Löschen</button></div>
         <div class="swipe-actions end"><button type="button" class="swipe-btn" data-act="plan">Einplanen</button><button type="button" class="swipe-btn accent" data-act="share">Teilen</button></div>
@@ -1174,10 +1468,10 @@ async function renderList() {
   };
   $('#q').oninput = (e) => { listQuery = e.target.value; draw(); };
   $('#sort').onchange = (e) => { listSort = e.target.value; draw(); };
-  app.querySelectorAll('.chip').forEach((chip) => {
+  app.querySelectorAll('.chip[data-tag]').forEach((chip) => {
     chip.onclick = () => {
       activeTag = activeTag === chip.dataset.tag ? null : chip.dataset.tag;
-      app.querySelectorAll('.chip').forEach((c) => c.classList.toggle('active', c.dataset.tag === activeTag));
+      app.querySelectorAll('.chip[data-tag]').forEach((c) => c.classList.toggle('active', c.dataset.tag === activeTag));
       draw();
     };
   });
@@ -1439,7 +1733,7 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
       <button type="button" class="icon-btn" data-img="-1" aria-label="Vorheriges Bild">‹</button>
       <span id="gallery-at" aria-live="polite">1 / ${r.images.length}</span>
       <button type="button" class="icon-btn" data-img="1" aria-label="Nächstes Bild">›</button></div>` : ''}`;
-  const videoHtml = (v) => `<div class="video${v.vertical ? ' vertical' : ''}">
+  const videoHtml = (v) => `<p class="hint offline-only">Ohne Internet lässt sich das Video nicht abspielen.</p><div class="video${v.vertical ? ' vertical' : ''}">
     <iframe data-video="${esc(v.key)}" src="${esc(embedUrl(v, location.origin))}" title="Video zum Rezept"
       allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`;
   // Alle Videos und die Bilder stehen gleichzeitig im Kasten, sichtbar ist immer nur eines.
@@ -1516,12 +1810,13 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
         ${sources.map(([u, href]) => `<li><a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(hostOf(u))}</a></li>`).join('')}
       </ul></section>` : ''}
 
-      <div class="actions">${own ? `
-        <button class="btn primary" id="plan-btn">Einplanen</button>
-        <a class="btn" href="#/r/${r.id}/bearbeiten">Bearbeiten</a>
-        <button class="btn" id="share">Teilen</button>
-        <button class="btn danger" id="del">Löschen</button>` : session
-    ? '<button class="btn primary" id="copy">In mein Kochbuch übernehmen</button>'
+      <div class="actions">
+        ${r.steps.length || r.ingredients.length ? `<button class="btn primary" id="cook-btn">${symbol('pot')}Kochen</button>` : ''}${own ? `
+        <button class="btn needs-net" id="plan-btn">Einplanen</button>
+        <a class="btn needs-net" href="#/r/${r.id}/bearbeiten">Bearbeiten</a>
+        <button class="btn needs-net" id="share">Teilen</button>
+        <button class="btn danger needs-net" id="del">Löschen</button>` : session
+    ? '<button class="btn primary needs-net" id="copy">In mein Kochbuch übernehmen</button>'
     : '<button class="btn primary" id="login-copy">Anmelden, um das Rezept zu übernehmen</button>'}
       </div>
     </article>`;
@@ -1720,6 +2015,9 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
     const b = e.target.closest('.seek');
     if (b) showMedia(b.dataset.video, Number(b.dataset.t));
   });
+
+  const cookBtn = $('#cook-btn');
+  if (cookBtn) cookBtn.onclick = () => openCookMode(r, { servings, own, videos, onClose: drawChecks });
 
   if (!own) {
     if (session) $('#copy').onclick = (e) => copyRecipe(r, e.target);
@@ -2862,7 +3160,37 @@ async function loadLists() {
 async function loadItems(listId) {
   const { data, error } = await supabase.from('shopping_items').select('*').eq('list_id', listId).order('created_at');
   if (error) throw error;
+  // Offline gesetzte Haken gelten, bis sie gespeichert sind.
+  const pending = loadPendingChecks();
+  return data.map((i) => (i.id in pending ? { ...i, checked: pending[i.id] } : i));
+}
+
+// Häufig gekaufte Artikel einer Liste; ohne haeufig.sql eine leere Liste.
+async function loadFrequent(listId) {
+  if (!frequentTable) return [];
+  const { data, error } = await supabase.from('shopping_frequent').select('*').eq('list_id', listId);
+  if (error) {
+    if (SQL_MISSING.has(error.code)) frequentTable = false;
+    return [];
+  }
   return data;
+}
+
+// Zählt einen Kauf mit und liefert die neue Liste der häufigen Artikel.
+async function countPurchase(listId, item, frequent) {
+  if (!frequentTable) return frequent;
+  const key = categoryKey(item.name);
+  const { error } = await supabase.rpc('count_purchase', {
+    p_list: listId, p_key: key, p_name: item.name, p_amount: item.amount ?? null, p_unit: item.unit ?? '',
+  });
+  if (error) {
+    if (SQL_MISSING.has(error.code)) frequentTable = false;
+    return frequent;
+  }
+  const now = new Date().toISOString();
+  const old = frequent.find((f) => f.key === key);
+  if (old) return frequent.map((f) => (f === old ? { ...f, count: f.count + 1, name: item.name, amount: item.amount, unit: item.unit, last_bought: now } : f));
+  return [...frequent, { list_id: listId, key, name: item.name, amount: item.amount, unit: item.unit, count: 1, last_bought: now, hidden: false }];
 }
 
 // Nimmt die Zutaten eines Plan-Eintrags von allen Listen. Liefert false bei einem Fehler.
@@ -2999,6 +3327,7 @@ async function renderShopping(listId) {
   const isOwner = list.owner_id === me;
   const ownCount = lists.filter((l) => l.owner_id === me).length;
   let items = await loadItems(list.id);
+  let frequent = await loadFrequent(list.id);
   const people = await supabase.rpc('list_people', { p_list: list.id });
   const members = (people.data ?? []).filter((p) => !p.is_owner);
   const owner = (people.data ?? []).find((p) => p.is_owner);
@@ -3015,7 +3344,7 @@ async function renderShopping(listId) {
         ${places.map((p) => `<option value="${esc(p.id)}"${placeFilter() === p.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}
       </select>
       <select id="item-sort" aria-label="Sortierung">
-        ${[['added', 'Hinzugefügt'], ['name', 'A–Z'], ['category', 'Nach Kategorie'], ['recipe', 'Nach Rezept']].map(([v, l]) => `<option value="${v}"${shoppingSort() === v ? ' selected' : ''}>${l}</option>`).join('')}
+        ${[['added', 'Hinzugefügt'], ['name', 'A–Z'], ['category', 'Ladenweg'], ['recipe', 'Nach Rezept']].map(([v, l]) => `<option value="${v}"${shoppingSort() === v ? ' selected' : ''}>${l}</option>`).join('')}
       </select>
     </div>
     <section class="card-panel share-section list-settings" id="list-settings" hidden>
@@ -3042,6 +3371,7 @@ async function renderShopping(listId) {
       <input name="item" placeholder="z. B. 1 l Milch" autocomplete="off" enterkeyhint="done" aria-label="Eintrag hinzufügen">
       <button class="btn">Hinzufügen</button>
     </form>
+    <div id="frequent"></div>
     <div id="list-recipes"></div>
     <ul class="shop-items" id="open-items"></ul>
     <div id="done-items"></div>`;
@@ -3049,7 +3379,7 @@ async function renderShopping(listId) {
   const draw = () => {
     const sort = shoppingSort();
     const filter = placeIds().includes(placeFilter()) ? placeFilter() : '';
-    const sorted = sortItems(items, sort).filter((i) => !filter || placesOf(i.name).includes(filter));
+    const sorted = sortItems(items, sort, filter).filter((i) => !filter || placesOf(i.name).includes(filter));
     const open = sorted.filter((i) => !i.checked);
     const done = sorted.filter((i) => i.checked);
     // Abhaken nur über die Checkbox; nach rechts wischen zeigt „Ändern“ (Menge und Kategorie).
@@ -3062,17 +3392,23 @@ async function renderShopping(listId) {
         <button class="icon-btn" data-del="${i.id}" aria-label="${esc(i.name)} löschen">×</button>
       </div></li>`;
     // Nach Rezept: Zwischenüberschriften, sobald ein neues Rezept beginnt.
+    // Auf dem Ladenweg ohne Ort-Filter steht zusätzlich der Ort darüber, sobald einer beginnt.
+    const placeOfItem = (x) => walkOfItem(x, filter).place;
     const rows = (list) => list.map((item, i) => {
       const groupBy = sort === 'category' ? (x) => categoryOf(x.name) : groupOf;
       const group = groupBy(item);
-      const head = (sort === 'recipe' || sort === 'category') && (i === 0 || groupBy(list[i - 1]) !== group) ? `<li class="group-head">${esc(group)}</li>` : '';
-      return head + row(item);
+      const newPlace = sort === 'category' && !filter && (i === 0 || placeOfItem(list[i - 1]) !== placeOfItem(item));
+      const placeHead = newPlace && places.length > 1 ? `<li class="group-head place-head">${symbol('pin')}${esc(placeName(placeOfItem(item)) ?? '')}</li>` : '';
+      const head = (sort === 'recipe' || sort === 'category') && (newPlace || i === 0 || groupBy(list[i - 1]) !== group) ? `<li class="group-head">${esc(group)}</li>` : '';
+      return placeHead + head + row(item);
     }).join('');
     $('#open-items').innerHTML = open.length ? rows(open)
       : `<li class="hint empty-list">${done.length ? 'Alles erledigt.' : filter ? `Für ${esc(placeName(filter))} steht nichts auf der Liste.` : 'Die Liste ist leer. Füge oben etwas hinzu oder setze im Plan Rezepte auf die Liste.'}</li>`;
     $('#done-items').innerHTML = done.length ? `<div class="section-head done-head"><h2>Erledigt (${done.length})</h2>
       <button class="link danger-link" id="clear-done">Erledigte löschen</button></div>
       <ul class="shop-items">${rows(done)}</ul>` : '';
+    const tips = frequentSuggestions(frequent, items, categoryKey, { keep: (f) => !filter || placesOf(f.name).includes(filter) });
+    $('#frequent').innerHTML = tips.length ? `<p class="hint">Häufig gekauft:</p><div class="chips frequent">${tips.map((f) => `<button type="button" class="chip needs-net" data-frequent="${esc(f.key)}" title="Lange drücken: nicht mehr vorschlagen">+ ${esc(f.name)}</button>`).join('')}</div>` : '';
     const recs = recipesOnList(items);
     $('#list-recipes').innerHTML = recs.length ? `<p class="hint">Aus Rezepten:</p><div class="chips static">${recs.map((r) => `<span class="chip tag-chip">${esc(r.title)}
       <button type="button" data-recipe="${esc(r.recipe_id)}" aria-label="${esc(r.title)} von der Liste nehmen">×</button></span>`).join('')}</div>` : '';
@@ -3116,8 +3452,14 @@ async function renderShopping(listId) {
         const item = items.find((i) => i.id === box.dataset.check);
         item.checked = box.checked;
         draw();
+        const pending = loadPendingChecks();
+        const remember = () => { savePendingChecks({ ...loadPendingChecks(), [item.id]: item.checked }); };
+        if (!navigator.onLine) { remember(); return; }
         const { error } = await supabase.from('shopping_items').update({ checked: item.checked }).eq('id', item.id);
+        if (error && isNetworkError(error)) { remember(); toast('Offline gemerkt, wird nachgereicht'); return; }
         if (error) toast(error.message);
+        else if (item.id in pending) { delete pending[item.id]; savePendingChecks(pending); }
+        if (!error && item.checked) frequent = await countPurchase(list.id, item, frequent);
       };
     });
     app.querySelectorAll('[data-del]').forEach((b) => {
@@ -3203,6 +3545,48 @@ async function renderShopping(listId) {
     input.focus();
   };
 
+  // Häufig gekauft: Tipp setzt den Artikel auf die Liste, langes Drücken blendet ihn aus.
+  const box = $('#frequent');
+  let pressTimer = null;
+  let pressed = false;
+  const hideFrequent = async (key) => {
+    const f = frequent.find((x) => x.key === key);
+    if (!f || !frequentTable) { toast('Ausblenden geht, sobald haeufig.sql ausgeführt ist.'); return; }
+    const { value } = await openSheet(`<h2>${esc(f.name)}</h2><p>Nicht mehr unter „Häufig gekauft“ vorschlagen?</p>
+      <div class="row"><button class="btn primary" value="ok">Nicht mehr vorschlagen</button><button class="btn ghost" value="cancel">Abbrechen</button></div>`);
+    if (value !== 'ok') return;
+    const { error } = await supabase.from('shopping_frequent').update({ hidden: true }).eq('list_id', list.id).eq('key', key);
+    if (error) { toast(error.message); return; }
+    f.hidden = true;
+    draw();
+  };
+  box.addEventListener('pointerdown', (e) => {
+    const chip = e.target.closest('[data-frequent]');
+    if (!chip) return;
+    pressed = false;
+    pressTimer = setTimeout(() => { pressed = true; hideFrequent(chip.dataset.frequent); }, 600);
+  });
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => box.addEventListener(ev, () => clearTimeout(pressTimer)));
+  box.addEventListener('contextmenu', (e) => {
+    const chip = e.target.closest('[data-frequent]');
+    if (!chip) return;
+    e.preventDefault();
+    if (!pressed) { clearTimeout(pressTimer); pressed = true; hideFrequent(chip.dataset.frequent); }
+  });
+  box.addEventListener('click', async (e) => {
+    const chip = e.target.closest('[data-frequent]');
+    if (!chip || pressed) { pressed = false; return; }
+    const f = frequentSuggestions(frequent, items, categoryKey, { limit: Infinity }).find((x) => x.key === chip.dataset.frequent);
+    if (!f) return;
+    chip.disabled = true;
+    const { data, error } = await supabase.from('shopping_items').insert({
+      list_id: list.id, name: f.name, amount: f.amount ?? null, unit: f.unit ?? '', manual: true,
+    }).select().single();
+    if (error) { toast(error.message); chip.disabled = false; return; }
+    if (!items.some((i) => i.id === data.id)) items.push(data);
+    draw();
+  });
+
   const byId = (sel) => app.querySelector(sel);
   byId('#manage').onclick = (e) => {
     const box = byId('#list-settings');
@@ -3267,11 +3651,15 @@ function shoppingSort() {
 
 const groupOf = (item) => item.sources?.[0]?.title ?? 'Von Hand';
 
-function sortItems(items, sort) {
+// Wo eine Zutat auf dem Ladenweg liegt; filter = der Ort, nach dem die Liste gefiltert ist.
+const walkOfItem = (item, filter) => walkKey(placesOf(item.name), categoryOf(item.name), placeIds(), walkOf, filter);
+
+function sortItems(items, sort, filter = '') {
   const list = [...items];
   if (sort === 'name') list.sort((a, b) => collator.compare(a.name, b.name));
   if (sort === 'category') {
-    list.sort((a, b) => categoryRank(categoryOf(a.name)) - categoryRank(categoryOf(b.name)) || collator.compare(a.name, b.name));
+    const keys = new Map(list.map((i) => [i, walkOfItem(i, filter).rank]));
+    list.sort((a, b) => keys.get(a)[0] - keys.get(b)[0] || keys.get(a)[1] - keys.get(b)[1] || collator.compare(a.name, b.name));
   }
   if (sort === 'recipe') {
     list.sort((a, b) => (!a.sources?.length - !b.sources?.length)
@@ -3531,6 +3919,8 @@ function renderManage() {
   $('#news-again').onclick = () => openNewsSheet(NEWS.slice(0, 2));
   $('#logout').onclick = async () => {
     await supabase.auth.signOut();
+    // Die zwischengespeicherten Daten gehören zu diesem Konto.
+    window.caches?.delete('kochbuch-daten').catch(() => {});
   };
 }
 
@@ -3599,7 +3989,7 @@ async function renderPlaces() {
   app.innerHTML = `
     <a class="back" href="#/verwalten">← Verwalten</a>
     <h1>Orte</h1>
-    <p class="hint">Wo du einkaufst. Die Orte gelten für alle deine Einkaufslisten; welche Orte eine Zutat hat, stellst du unter <a href="#/zutaten">Zutaten</a> ein. Tippe einen Ort an, um ihn umzubenennen oder zu löschen; mit den Pfeilen änderst du die Reihenfolge, auch im Filter der Einkaufsliste.</p>
+    <p class="hint">Wo du einkaufst. Die Orte gelten für alle deine Einkaufslisten; welche Orte eine Zutat hat, stellst du unter <a href="#/zutaten">Zutaten</a> ein. Tippe einen Ort an, um ihn umzubenennen oder zu löschen; mit den Pfeilen änderst du die Reihenfolge, auch im Filter der Einkaufsliste. Unter „Ladenweg“ legst du fest, in welcher Reihenfolge die Abteilungen in diesem Laden liegen.</p>
     <ul class="people place-list" id="place-list"></ul>
     <form class="import-row" id="add-place">
       <input name="place" placeholder="Neuer Ort, z. B. Bäcker" maxlength="40" autocomplete="off" enterkeyhint="done" aria-label="Neuer Ort">
@@ -3617,6 +4007,7 @@ async function renderPlaces() {
   };
   const draw = () => {
     $('#place-list').innerHTML = places.map((p, i) => `<li><button type="button" class="place-name" data-place="${esc(p.id)}">${esc(p.name)}</button><span class="row">
+      <a class="btn small" href="#/ladenweg/${encodeURIComponent(p.id)}" aria-label="Ladenweg für ${esc(p.name)}">Ladenweg</a>
       <button type="button" class="btn small" data-up="${i}" aria-label="${esc(p.name)} nach oben"${i === 0 ? ' disabled' : ''}>↑</button>
       <button type="button" class="btn small" data-down="${i}" aria-label="${esc(p.name)} nach unten"${i === places.length - 1 ? ' disabled' : ''}>↓</button></span></li>`).join('');
     const move = async (i, j) => {
@@ -3669,6 +4060,57 @@ async function renderPlaces() {
     input.value = '';
     draw();
   };
+}
+
+// Ladenweg eines Orts: die Kategorien in der Reihenfolge, in der man durch den Laden geht.
+async function renderWalk(placeId) {
+  await loadCategories();
+  const place = places.find((p) => p.id === placeId);
+  if (!place) { location.hash = '#/orte'; return; }
+  let order = walkOf(place.id);
+  app.innerHTML = `
+    <a class="back" href="#/orte">← Orte</a>
+    <h1>Ladenweg: ${esc(place.name)}</h1>
+    <p class="hint">Bring die Abteilungen in die Reihenfolge, in der du durch ${esc(place.name)} gehst. Was es dort nicht gibt, schiebst du nach unten. Auf der Einkaufsliste sortiert „Ladenweg“ danach.</p>
+    ${walkColumn ? '' : '<p class="notice">Damit der Ladenweg gespeichert wird, muss in Supabase noch supabase/ladenweg.sql ausgeführt werden.</p>'}
+    <ol class="people place-list walk-list" id="walk-list"></ol>
+    <div class="row"><button type="button" class="btn ghost" id="walk-reset">Zurücksetzen</button></div>`;
+  const save = async () => {
+    if (!walkColumn) { toast('Dafür fehlt noch ladenweg.sql.'); return false; }
+    const custom = order.join() === CATEGORIES.join() ? null : order;
+    const { error } = await supabase.from('shopping_places').update({ category_order: custom }).eq('id', place.id);
+    if (error) { toast(error.message); return false; }
+    place.order = custom;
+    return true;
+  };
+  const draw = () => {
+    $('#walk-list').innerHTML = order.map((c, i) => `<li><span>${esc(c)}</span><span class="row">
+      <button type="button" class="btn small" data-up="${i}" aria-label="${esc(c)} nach oben"${i === 0 ? ' disabled' : ''}>↑</button>
+      <button type="button" class="btn small" data-down="${i}" aria-label="${esc(c)} nach unten"${i === order.length - 1 ? ' disabled' : ''}>↓</button></span></li>`).join('');
+    $('#walk-reset').disabled = order.join() === CATEGORIES.join();
+  };
+  const move = async (i, j) => {
+    const before = order;
+    order = [...order];
+    [order[i], order[j]] = [order[j], order[i]];
+    draw();
+    if (!await save()) { order = before; draw(); }
+    // Der Knopf bleibt unter dem Finger, damit man mehrmals hintereinander tippen kann.
+    app.querySelector(`[data-${j < i ? 'up' : 'down'}="${j}"]`)?.focus();
+  };
+  $('#walk-list').onclick = (e) => {
+    const b = e.target.closest('[data-up], [data-down]');
+    if (!b) return;
+    const i = Number(b.dataset.up ?? b.dataset.down);
+    move(i, b.dataset.up != null ? i - 1 : i + 1);
+  };
+  $('#walk-reset').onclick = async () => {
+    const before = order;
+    order = [...CATEGORIES];
+    draw();
+    if (!await save()) { order = before; draw(); }
+  };
+  draw();
 }
 
 const helpLines = (topic) => `<ul class="help-lines">${topic.lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>`;
@@ -4182,8 +4624,20 @@ if (isConfigured) {
     // Nur bei echten Wechseln neu zeichnen, nicht beim stillen Token-Refresh.
     if (userChanged || event === 'PASSWORD_RECOVERY' || event === 'SIGNED_OUT') setTimeout(render);
   });
-  const { data } = await supabase.auth.getSession();
-  session = data.session;
+  const { data } = await supabase.auth.getSession().catch(() => ({ data: {} }));
+  session = data.session ?? null;
+  // Ohne Netz kann die Anmeldung nicht erneuert werden; die gespeicherte reicht dann, um die
+  // zwischengespeicherten Daten zu zeigen.
+  if (!session && !navigator.onLine) session = storedSession();
+  if (navigator.onLine) flushPendingChecks();
+}
+
+function storedSession() {
+  try {
+    const key = Object.keys(localStorage).find((k) => /^sb-.*-auth-token$/.test(k));
+    const saved = key && JSON.parse(localStorage.getItem(key));
+    return saved?.user?.id ? saved : null;
+  } catch { return null; }
 }
 render();
 

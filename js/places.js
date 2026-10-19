@@ -56,3 +56,23 @@ export function guessPlaces(rawName, category, placeIds = DEFAULT_PLACES.map((p)
   const have = ids.filter((id) => placeIds.includes(id));
   return have.length ? have : placeIds.slice(0, 1);
 }
+
+// Ladenweg: die Kategorien in der Reihenfolge, in der sie in einem Ort liegen. Gespeichert
+// ist sie in shopping_places.category_order; fehlt sie, gilt die vorgegebene aus
+// categories.js. Unbekannte Einträge fallen weg, neue Kategorien kommen in ihrer
+// vorgegebenen Reihenfolge hinten dazu.
+export function categoryOrder(saved, all) {
+  const known = new Set(all);
+  const order = [...new Set((saved ?? []).filter((c) => known.has(c)))];
+  return [...order, ...all.filter((c) => !order.includes(c))];
+}
+
+// Sortierschlüssel einer Zutat auf dem Ladenweg: zuerst der Ort (in der Reihenfolge der
+// Orte; bei mehreren Orten der erste davon), dann die Kategorie in der Reihenfolge dieses Orts.
+// placeOrder: Kennungen der Orte; orderOf(placeId) liefert den Ladenweg eines Orts.
+export function walkKey(itemPlaces, category, placeOrder, orderOf, onlyPlace = '') {
+  const place = onlyPlace || placeOrder.find((id) => itemPlaces.includes(id)) || placeOrder[0] || '';
+  const order = orderOf(place);
+  const at = order.indexOf(category);
+  return { place, rank: [onlyPlace ? 0 : Math.max(0, placeOrder.indexOf(place)), at === -1 ? order.length : at] };
+}

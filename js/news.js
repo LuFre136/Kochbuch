@@ -5,6 +5,41 @@
 
 export const NEWS = [
   {
+    version: '2026-10-19-haeufig',
+    title: 'Häufig gekauft',
+    lines: [
+      { text: 'Über der Einkaufsliste stehen die Artikel, die du oft kaufst. Ein Tipp setzt sie wieder auf die Liste.', ziel: '#/hilfe/einkauf' },
+    ],
+  },
+  {
+    version: '2026-10-19-ladenweg',
+    title: 'Ladenweg',
+    lines: [
+      { text: 'Unter „Verwalten“ → „Orte“ legst du für jeden Laden fest, in welcher Reihenfolge die Abteilungen liegen. Die Einkaufsliste sortiert unter „Ladenweg“ danach.', ziel: '#/orte' },
+    ],
+  },
+  {
+    version: '2026-10-19-offline',
+    title: 'Ohne Internet lesen',
+    lines: [
+      { text: 'Rezepte, Kochmodus und Einkaufsliste gehen jetzt auch ohne Netz, mit dem Stand vom letzten Laden. Haken auf der Einkaufsliste werden nachgereicht.', ziel: '#/hilfe/offline' },
+    ],
+  },
+  {
+    version: '2026-10-19-zeitfilter',
+    title: 'Filter nach Zeit',
+    lines: [
+      { text: 'In der Übersicht, bei „Was kochen?“ und im Saisonkalender zeigen „bis 15 Min.“ bis „bis 1 Std.“ nur Rezepte, die so schnell fertig sind.', ziel: '#/hilfe/rezepte' },
+    ],
+  },
+  {
+    version: '2026-10-19-kochmodus',
+    title: 'Kochmodus',
+    lines: [
+      { text: '„Kochen“ im Rezept zeigt jeden Schritt groß auf einer eigenen Seite, und das Display bleibt dabei an.', ziel: '#/hilfe/beimkochen' },
+    ],
+  },
+  {
     version: '2026-10-19-mengen-schritte',
     title: 'Mengen in den Schritten',
     lines: [

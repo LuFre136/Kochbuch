@@ -37,3 +37,21 @@ test('cookedFromPlan nimmt je Rezept das späteste Datum', () => {
   assert.deepEqual([...cookedFromPlan(rows)], [['a', '2026-10-05'], ['b', '2026-10-03']]);
   assert.equal(cookedFromPlan(undefined).size, 0);
 });
+
+import { filterByTime, recipeMinutes } from '../js/sorting.js';
+
+test('Filter nach Zeit nimmt die Gesamtzeit, sonst die Kochzeit', () => {
+  const list = [
+    { title: 'A', total_minutes: 10 }, { title: 'B', total_minutes: 45, cook_minutes: 20 },
+    { title: 'C', cook_minutes: 25 }, { title: 'D' }, { title: 'E', total_minutes: null, cook_minutes: null },
+  ];
+  assert.equal(recipeMinutes(list[1]), 45);
+  assert.equal(recipeMinutes(list[2]), 25);
+  const names = (r) => r.shown.map((x) => x.title).join('');
+  assert.deepEqual({ t: names(filterByTime(list, 30)), u: filterByTime(list, 30).unknown }, { t: 'AC', u: 2 });
+  assert.equal(names(filterByTime(list, 45)), 'ABC');
+  assert.equal(names(filterByTime(list, 'none')), 'DE');
+  assert.equal(names(filterByTime(list, null)), 'ABCDE');
+  // Für Trefferlisten mit { recipe }
+  assert.equal(filterByTime([{ recipe: list[0] }, { recipe: list[3] }], 15, (h) => h.recipe).shown.length, 1);
+});

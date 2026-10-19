@@ -11,6 +11,7 @@ export const HELP = [
     lines: [
       'Die Übersicht zeigt alle deine Rezepte. Oben suchst du nach Titel oder Zutat und filterst über die Tags.',
       'Mit dem Knopf rechts oben sortierst du nach Titel, Bewertung, Anlagedatum oder danach, wann du ein Rezept zuletzt gekocht hast.',
+      'Die Zeit-Chips („bis 30 Min.“ …) zeigen nur Rezepte, die in der Gesamtzeit fertig sind, ersatzweise in der Koch-/Backzeit. Es gibt sie auch bei „Was kochen?“ und im Saisonkalender. Rezepte ohne Zeitangabe fallen dabei weg; der Hinweis darunter zeigt sie dir zum Nachtragen.',
       '„+ Rezept“ legt ein neues an — entweder aus einem Link, Video oder Foto, oder selbst getippt.',
       'Im Rezept änderst du die Anzahl Portionen; die Mengen der Zutaten werden mitgerechnet.',
       'Ein Wisch nach links oder rechts auf einem Rezept führt zu seinen Alternativen, falls es welche hat.',
@@ -18,8 +19,11 @@ export const HELP = [
   },
   {
     id: 'beimkochen',
-    title: 'Beim Kochen: Haken, Timer und Mengen',
+    title: 'Kochmodus, Haken, Timer und Mengen',
     lines: [
+      '„Kochen“ im Rezept öffnet den Kochmodus: zuerst die Zutaten, dann jeder Schritt groß auf einer eigenen Seite. Wische oder tippe auf „Weiter“ und „Zurück“.',
+      'Solange der Kochmodus offen ist, bleibt das Display an. Hat ein Schritt einen Zeitstempel, öffnet „Video ab …“ das Video unten auf der Seite.',
+      'Auf der letzten Seite speichert „Fertig, heute gekocht“ das Datum als „zuletzt gekocht“. Öffnest du den Kochmodus wieder, geht es beim Schritt nach deinem letzten Haken weiter.',
       'Tippe im Rezept auf eine Zutat oder einen Schritt, um sie durchzustreichen. Ein zweiter Tipp nimmt den Haken zurück.',
       'Die Haken bleiben auf diesem Gerät stehen, auch wenn du die App schließt. Nach 12 Stunden ohne neuen Haken beginnt das Rezept wieder leer, oder du tippst auf „Haken entfernen“.',
       'Zeitangaben in den Schritten wie „20 Minuten“ sind eingerahmt. Ein Tipp darauf startet einen Timer; bei einer Spanne wie „10–15 Minuten“ läuft er auf den kleineren Wert.',
@@ -27,6 +31,17 @@ export const HELP = [
       'Ein Timer klingelt nur, solange die App offen ist. Ist sie zu, läuft die Zeit trotzdem weiter, und beim nächsten Öffnen meldet er sich.',
       'In den Schritten steht hinter jeder Zutat ihre Menge für die eingestellten Portionen, auch bei Anteilen wie „die Hälfte des Mehls“ oder „die restliche Butter“. Der Schalter „Mengen in den Schritten“ blendet sie aus.',
       'Kommt eine Zutat ohne Anteil in mehreren Schritten vor, steht die Menge nur beim ersten Mal. Nennt ein Schritt die Zutat anders als die Zutatenliste, findet die App sie nicht.',
+    ],
+  },
+  {
+    id: 'offline',
+    title: 'Ohne Internet',
+    lines: [
+      'Die App merkt sich alles, was sie zuletzt geladen hat. Ohne Netz zeigt sie diesen Stand, und oben steht, von wann er ist.',
+      'Offline gehen deine Rezepte, der Kochmodus mit Timern und Haken, „Was kochen?“, der Saisonkalender und die Einkaufsliste. Kochbücher anderer gehen, wenn du sie vorher einmal geöffnet hast.',
+      'Bilder bleiben auf dem Gerät, sobald sie einmal angezeigt wurden; die Titelbilder lädt die App im WLAN von allein vor. Videos brauchen immer Internet.',
+      'Auf der Einkaufsliste kannst du auch ohne Empfang abhaken. Die Haken werden gespeichert, sobald wieder Netz da ist. Bearbeiten, Teilen, Einplanen und Importieren brauchen Internet.',
+      'Am zuverlässigsten klappt das, wenn die App auf dem Home-Bildschirm liegt. Im Safari-Tab kann das iPhone die gespeicherten Daten löschen, wenn du die Seite länger nicht öffnest.',
     ],
   },
   {
@@ -112,18 +127,21 @@ export const HELP = [
       'Du kannst mehrere Listen führen, etwa eine pro Haushalt oder Woche.',
       'Zutaten kommen aus einem Rezept oder von Hand dazu; gleiche Zutaten werden zusammengefasst.',
       'Jede Zutat hat eine Kategorie und mindestens einen Einkaufsort. Wische einen Eintrag nach rechts, um beides zu ändern; oben filterst du die Liste nach Ort.',
+      '„Häufig gekauft“ über der Liste zeigt, was ihr oft abhakt. Ein Tipp setzt den Artikel mit seiner üblichen Menge auf die Liste; langes Drücken blendet ihn aus. Bei geteilten Listen sehen alle dieselben Vorschläge.',
+      'Die Sortierung „Ladenweg“ ordnet die Liste so, wie du durch den Laden gehst. Mit Ort-Filter gilt der Ladenweg dieses Orts; ohne Filter steht die Liste nach Orten geordnet und darin nach deren Ladenweg.',
       '„Verwalten“ gibt dir auch einen Einladungslink, mit dem eine Person die Liste mitbearbeiten kann — Änderungen erscheinen bei allen sofort. Jeder Link gilt für eine Person.',
     ],
   },
   {
     id: 'zutaten',
     title: 'Zutaten und Einkaufsorte',
-    routes: ['zutaten', 'orte'],
+    routes: ['zutaten', 'orte', 'ladenweg'],
     lines: [
       'Unter „Verwalten“ → „Zutaten“ stehen alle deine Zutaten nach Kategorien. Tippe eine an, um ihre Kategorie und ihre Einkaufsorte zu ändern; das gilt in allen Rezepten und Einkaufslisten.',
       'Oben erfasst du neue Zutaten, bevor sie in einem Rezept vorkommen. Die App schlägt Kategorie und Orte vor.',
       'Jede Zutat hat mindestens einen Ort. Löschst du einen Ort, bekommen Zutaten, die nur diesen hatten, wieder einen vorgeschlagenen.',
       'Unter „Verwalten“ → „Orte“ legst du Einkaufsorte an, benennst sie um, sortierst sie mit den Pfeilen und löschst sie. Ein Ort bleibt immer.',
+      '„Ladenweg“ neben einem Ort legt fest, in welcher Reihenfolge die Abteilungen dort liegen, zum Beispiel erst Obst und Gemüse, dann Brot. Zwei Supermärkte mit anderem Aufbau legst du als zwei Orte an.',
     ],
   },
   {

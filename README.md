@@ -35,6 +35,8 @@ Jede Zutat hat eine Kategorie (Obst, Gemüse, Fleisch & Wurst …). Kommt eine Z
 
 Die Übersicht lässt sich nach **A–Z**, **Beste zuerst** (Bewertung), **Neueste zuerst** (Erstelldatum) und **Zuletzt gekocht** sortieren. Steht an einem Rezept ein Datum, zeigt die Karte es als Zusatzinfo („gekocht gestern“, „gekocht vor 5 Tagen“, sonst das Datum), und in der Rezeptansicht steht es bei den Zeiten.
 
+Unter den Tags stehen Zeit-Chips („bis 15 Min.“ bis „bis 1 Std.“), auch bei „Was kochen?“ und im Saisonkalender (`timeFilter` in `js/app.js`, `filterByTime` in `js/sorting.js`). Gezählt wird `total_minutes`, ersatzweise `cook_minutes`. Rezepte ohne beides fallen bei aktivem Filter weg; der Hinweis darunter schaltet auf „ohne Zeitangabe“ um, damit man sie findet. Der Filter gilt bis zum Abwählen oder Neustart der App.
+
 Das Datum setzt die App selbst: fällt ein eingeplanter Tag aus dem Essensplan, weil er vorbei ist, gilt das Rezept an diesem Tag als gekocht. Das späteste solche Datum gewinnt, ein älteres überschreibt kein neueres. Ohne [`supabase/gekocht.sql`](supabase/gekocht.sql) fehlt die Spalte `last_cooked`; dann entfällt die Sortierung „Zuletzt gekocht“ und die App arbeitet sonst unverändert weiter.
 
 ## Beim Kochen: Haken und Timer
@@ -44,6 +46,14 @@ Ein Tipp auf eine Zutat oder einen Schritt in der Rezeptansicht streicht sie dur
 Zeitangaben in Schritten („20 Minuten“, „10–15 Min.“, „1 Std. und 20 Min.“, „eine halbe Stunde“) erkennt `findDurations` in [`js/cooking.js`](js/cooking.js) und macht sie antippbar; bei einer Spanne läuft der Timer auf den kleineren Wert. Laufende Timer stehen als Leiste über der Navigation, auf jeder Seite, mit Pause und Abbrechen. Gespeichert wird die Endzeit (`kochbuch.timers`), damit ein Timer weiterläuft, wenn die App geschlossen ist. Klingeln (Ton über Web Audio, Vibration wo erlaubt) geht nur bei offener App; ein abgelaufener Timer meldet sich beim nächsten Öffnen.
 
 Hinter Zutaten im Schritttext setzt die Rezeptansicht die Menge in Klammern, umgerechnet auf die eingestellten Portionen (`stepAmounts` und `stepPieces` in `js/cooking.js`). Erkannt wird über das letzte Wort des Zutatennamens, mit demselben Normalisieren wie bei „Was kochen?“. Ein Anteil davor („die Hälfte des“, „ein Drittel der“, „1/4 der“) gilt immer; „Rest“, „restliche“, „übrige“ bekommt, was frühere Schritte übrig ließen; ohne Anteil steht die Menge nur bei der ersten Erwähnung, „etwas“ bekommt keine. Der Schalter „Mengen in den Schritten“ über der Zubereitung bleibt auf dem Gerät (`kochbuch.stepAmounts`).
+
+Der Kochmodus (`openCookMode` in `js/app.js`, Knopf „Kochen“ im Rezept) legt eine Seite über den ganzen Bildschirm: Zutaten für die eingestellten Portionen, je Schritt eine Seite in großer Schrift mit Timern und Mengen, zum Schluss „Fertig“. Er nutzt dieselben Haken wie die Rezeptansicht und beginnt beim Schritt nach dem letzten Haken. Das Display hält `navigator.wakeLock` an; die Sperre wird nach dem Zurückkehren in die App neu angefordert, und wo das Gerät sie nicht kann, steht ein Hinweis. „Fertig, heute gekocht“ setzt `last_cooked` (nur bei eigenen Rezepten und mit `gekocht.sql`). Ein Zeitstempel öffnet das Video in einem kleinen Fenster unten, neu geladen ab der Stelle.
+
+## Ohne Internet
+
+Der Service Worker ([`sw.js`](sw.js)) hält drei Caches: die App-Dateien (Netzwerk zuerst, versioniert), `kochbuch-daten` für Lesezugriffe auf `/rest/v1/` (Netzwerk zuerst, jede Antwort mit Zeitstempel `x-kochbuch-saved`) und `kochbuch-bilder` für Bilder aus dem Storage und die Supabase-Bibliothek von esm.sh (Cache zuerst, bleibt bei Updates erhalten). Liefert er Daten aus dem Cache, schickt er der Seite `{ type: 'kochbuch-offline', at }`; die App zeigt dann „Offline · Stand von …“ unter der Kopfzeile und setzt `body.offline`.
+
+Offline sperrt ein Klick-Wächter alles mit `.needs-net` (und Wisch-Knöpfe, Löschen, Hinzufügen auf der Einkaufsliste) mit dem Hinweis, dass Internet nötig ist. Haken auf der Einkaufsliste landen in `kochbuch.pendingChecks` und werden beim nächsten `online` bzw. Start gespeichert; bis dahin überlagern sie die geladenen Einträge. Kann die Anmeldung offline nicht erneuert werden, nimmt die App die gespeicherte Sitzung aus `localStorage`. RPC-Aufrufe (POST) werden nicht zwischengespeichert. Beim Abmelden wird `kochbuch-daten` gelöscht. Nach dem Laden der Übersicht holt die App einmal alle Titelbilder (nicht im Mobilfunk, soweit der Browser das meldet).
 
 ## Alternativrezepte
 
@@ -94,6 +104,10 @@ Unter „Verwalten“ → „Orte“ (`#/orte`) legt man Einkaufsorte an, benenn
 
 Im Plan setzt „Auf die Einkaufsliste“ die Zutaten eines eingeplanten Rezepts (umgerechnet auf die geplanten Portionen) auf eine Liste. Jeder Eintrag merkt sich, aus welchen Rezepten er stammt. Steht eine Zutat schon offen auf der Liste und passen die Einheiten (gleich oder umrechenbar wie g/kg), fragt die App, ob zusammengerechnet oder ein neuer Eintrag angelegt werden soll. Über die Rezept-Chips oben in der Liste nimmt man alles wieder heraus, was ein Rezept beigetragen hat; von Hand eingetragene Mengen bleiben stehen.
 
+
+**Häufig gekauft:** Jedes Abhaken ruft `count_purchase` auf ([`supabase/haeufig.sql`](supabase/haeufig.sql), Tabelle `shopping_frequent` je Liste und Zutatenschlüssel, mit Zähler, letzter Menge und `hidden`). Über der Liste stehen bis zu 12 Vorschläge, die meisten Käufe zuerst, ohne Artikel, die offen auf der Liste stehen, und mit Ort-Filter nur die dieses Orts (`frequentSuggestions` in `js/shopping.js`). Tipp: Eintrag mit der letzten Menge anlegen; langes Drücken: `hidden = true`. Solange noch nichts gezählt ist (oder die SQL-Datei fehlt), schlägt die App die abgehakten Einträge der Liste vor.
+
+**Ladenweg:** Jeder Ort kann eine eigene Reihenfolge der Kategorien haben (`shopping_places.category_order`, aus [`supabase/ladenweg.sql`](supabase/ladenweg.sql); `null` = Reihenfolge aus `js/categories.js`). Eingestellt wird sie unter „Verwalten“ → „Orte“ → „Ladenweg“ (`#/ladenweg/<id>`). Die Sortierung „Ladenweg“ der Einkaufsliste nimmt mit Ort-Filter den Weg dieses Orts; ohne Filter ordnet sie erst nach Orten (bei mehreren Orten einer Zutat der erste in der Orte-Reihenfolge) und darin nach deren Weg, mit Zwischenüberschriften für Ort und Kategorie (`categoryOrder`, `walkKey` in `js/places.js`). Ohne die SQL-Datei gilt überall die vorgegebene Reihenfolge.
 ## Saisonkalender
 
 Unter „Was kochen?“ → „Saison“ zeigt die App, welches Obst und Gemüse in Deutschland gerade frisch (oder auf Wunsch als Lagerware) zu haben ist, und darunter die eigenen Rezepte, die davon etwas enthalten. Die Daten stehen in [`js/season.js`](js/season.js) und lassen sich dort ergänzen.
