@@ -779,5 +779,5 @@ body.cooking .toast { z-index: 35; }
 body.offline .needs-net, body.offline .swipe-btn, body.offline #add-item button { opacity: 0.45; }
 .offline-only { display: none; }
 body.offline .offline-only { display: block; margin: 0 0 6px; }
-.group-head.place-head { color: var(--text); font-size: 0.85rem; }
-.group-head.place-head .sym { margin-right: 4px; }
+.shop-items li.group-head.place-head { color: var(--text); font-size: 0.85rem; }
+.shop-items li.group-head.place-head .sym { margin-right: 4px; }
