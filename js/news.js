@@ -5,6 +5,13 @@
 
 export const NEWS = [
   {
+    version: '2026-10-19-offline',
+    title: 'Ohne Internet lesen',
+    lines: [
+      { text: 'Rezepte, Kochmodus und Einkaufsliste gehen jetzt auch ohne Netz, mit dem Stand vom letzten Laden. Haken auf der Einkaufsliste werden nachgereicht.', ziel: '#/hilfe/offline' },
+    ],
+  },
+  {
     version: '2026-10-19-zeitfilter',
     title: 'Filter nach Zeit',
     lines: [

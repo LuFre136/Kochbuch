@@ -34,6 +34,17 @@ export const HELP = [
     ],
   },
   {
+    id: 'offline',
+    title: 'Ohne Internet',
+    lines: [
+      'Die App merkt sich alles, was sie zuletzt geladen hat. Ohne Netz zeigt sie diesen Stand, und oben steht, von wann er ist.',
+      'Offline gehen deine Rezepte, der Kochmodus mit Timern und Haken, „Was kochen?“, der Saisonkalender und die Einkaufsliste. Kochbücher anderer gehen, wenn du sie vorher einmal geöffnet hast.',
+      'Bilder bleiben auf dem Gerät, sobald sie einmal angezeigt wurden; die Titelbilder lädt die App im WLAN von allein vor. Videos brauchen immer Internet.',
+      'Auf der Einkaufsliste kannst du auch ohne Empfang abhaken. Die Haken werden gespeichert, sobald wieder Netz da ist. Bearbeiten, Teilen, Einplanen und Importieren brauchen Internet.',
+      'Am zuverlässigsten klappt das, wenn die App auf dem Home-Bildschirm liegt. Im Safari-Tab kann das iPhone die gespeicherten Daten löschen, wenn du die Seite länger nicht öffnest.',
+    ],
+  },
+  {
     id: 'importieren',
     title: 'Rezept importieren',
     routes: ['neu'],

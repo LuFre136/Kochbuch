@@ -770,3 +770,12 @@ body.cooking .toast { z-index: 35; }
 .time-filter .chip { flex: none; white-space: nowrap; }
 .time-filter .sym { margin-right: 4px; }
 .time-unknown { margin: -6px 0 12px; }
+
+/* Offline */
+.offline-bar {
+  margin: 0; padding: 6px 16px; text-align: center; font-size: 0.85rem; font-weight: 600;
+  background: var(--surface-2); color: var(--muted); border-bottom: 1px solid var(--border);
+}
+body.offline .needs-net, body.offline .swipe-btn, body.offline #add-item button { opacity: 0.45; }
+.offline-only { display: none; }
+body.offline .offline-only { display: block; margin: 0 0 6px; }

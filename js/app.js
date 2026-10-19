@@ -100,6 +100,103 @@ function toast(message) {
   setTimeout(() => el.remove(), 3500);
 }
 
+// ---------- Offline ----------
+// Ohne Netz liefert der Service Worker die zuletzt geladenen Daten und meldet, von wann sie
+// sind. Dann steht oben ein Hinweis, und was das Internet braucht, ist gesperrt. Haken auf
+// der Einkaufsliste werden gemerkt und nachgereicht.
+
+let offlineAt = null; // Zeitpunkt der angezeigten Daten, solange die App offline ist
+
+const isNetworkError = (err) => !navigator.onLine || /fetch|network|load failed|offline/i.test(err?.message ?? '');
+
+function formatSaved(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const time = d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  if (d.toLocaleDateString('sv-SE') === today()) return `heute ${time}`;
+  return `${d.toLocaleDateString('de-DE', { day: 'numeric', month: 'numeric' })} ${time}`;
+}
+
+function setOffline(at) {
+  if (at && (!offlineAt || at < offlineAt)) offlineAt = at;
+  document.body.classList.add('offline');
+  let bar = document.getElementById('offline-bar');
+  if (!bar) {
+    bar = document.createElement('p');
+    bar.id = 'offline-bar';
+    bar.className = 'offline-bar';
+    bar.setAttribute('role', 'status');
+    document.querySelector('.topbar').after(bar);
+  }
+  bar.textContent = offlineAt ? `Offline · Stand von ${formatSaved(offlineAt)}` : 'Offline';
+}
+
+function setOnline() {
+  if (!document.body.classList.contains('offline')) return;
+  offlineAt = null;
+  document.body.classList.remove('offline');
+  document.getElementById('offline-bar')?.remove();
+  flushPendingChecks().then(() => { if (session) render(); });
+}
+
+navigator.serviceWorker?.addEventListener('message', (e) => {
+  if (e.data?.type === 'kochbuch-offline') setOffline(e.data.at);
+});
+window.addEventListener('offline', () => setOffline());
+window.addEventListener('online', setOnline);
+if (!navigator.onLine) setOffline();
+
+// Was ohne Netz nicht geht, ist gesperrt: ein Tipp darauf erklärt es nur.
+const NEEDS_NET = '.needs-net, .swipe-btn, [data-del], #add-item button, #list-settings button, #list-recipes button, #list-select';
+document.addEventListener('click', (e) => {
+  if (!document.body.classList.contains('offline') || !e.target.closest(NEEDS_NET)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  toast('Dafür braucht die App Internet.');
+}, true);
+document.addEventListener('submit', (e) => {
+  if (!document.body.classList.contains('offline') || e.target.id !== 'add-item') return;
+  e.preventDefault();
+  e.stopPropagation();
+  toast('Dafür braucht die App Internet.');
+}, true);
+
+// Haken auf der Einkaufsliste, die noch nicht gespeichert werden konnten: { [Eintrag]: true/false }
+const loadPendingChecks = () => {
+  try { return JSON.parse(localStorage.getItem('kochbuch.pendingChecks') || '{}') || {}; } catch { return {}; }
+};
+function savePendingChecks(p) {
+  try { localStorage.setItem('kochbuch.pendingChecks', JSON.stringify(p)); } catch { /* privater Modus */ }
+}
+
+async function flushPendingChecks() {
+  const pending = loadPendingChecks();
+  for (const [id, checked] of Object.entries(pending)) {
+    const { error } = await supabase.from('shopping_items').update({ checked }).eq('id', id);
+    if (error && isNetworkError(error)) return;
+    delete pending[id];
+    savePendingChecks(pending);
+  }
+}
+
+// Titelbilder aller Rezepte einmal vorladen, damit sie auch offline da sind (der Service
+// Worker hebt jedes geladene Bild auf). Nicht im Mobilfunk, soweit der Browser das verrät.
+let imagesWarmed = false;
+function warmImages(list) {
+  const conn = navigator.connection;
+  if (imagesWarmed || !navigator.onLine || !navigator.serviceWorker?.controller || conn?.saveData || conn?.type === 'cellular') return;
+  imagesWarmed = true;
+  const urls = list.filter((r) => r.images?.[0]).map((r) => imageUrl(r.images[0]));
+  const next = () => {
+    const url = urls.shift();
+    if (!url || !navigator.onLine) return;
+    const img = new Image();
+    img.onload = img.onerror = () => setTimeout(next, 50);
+    img.src = url;
+  };
+  (window.requestIdleCallback ?? setTimeout)(next);
+}
+
 // ---------- Timer ----------
 // Laufende Timer stehen als Leiste unten auf jeder Seite. Gespeichert wird die Endzeit, damit
 // ein Timer weiterläuft, wenn die App zu ist; klingeln kann er nur, solange sie offen ist.
@@ -652,7 +749,7 @@ function renderNav() {
   const topic = helpFor(first, action);
   // "+ Rezept" steht nur auf der Übersicht; Abmelden liegt unter "Verwalten".
   nav.innerHTML = `
-    ${first ? '' : '<a class="btn primary small" href="#/neu">+ Rezept</a>'}
+    ${first ? '' : '<a class="btn primary small needs-net" href="#/neu">+ Rezept</a>'}
     ${topic ? '<button class="icon-btn" id="help-btn" aria-label="Hilfe zu dieser Seite" title="Hilfe zu dieser Seite">?</button>' : ''}
     <button class="icon-btn bell" id="bell" hidden>${BELL}<span class="badge" hidden></span></button>`;
   const help = $('#help-btn', nav);
@@ -1320,6 +1417,7 @@ async function renderList() {
   }
   const tags = [...new Set(all.flatMap((r) => r.tags))].sort(collator.compare);
   if (activeTag && !tags.includes(activeTag)) activeTag = null;
+  warmImages(all);
   app.innerHTML = `
     
     <div class="search">
@@ -1627,7 +1725,7 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
       <button type="button" class="icon-btn" data-img="-1" aria-label="Vorheriges Bild">‹</button>
       <span id="gallery-at" aria-live="polite">1 / ${r.images.length}</span>
       <button type="button" class="icon-btn" data-img="1" aria-label="Nächstes Bild">›</button></div>` : ''}`;
-  const videoHtml = (v) => `<div class="video${v.vertical ? ' vertical' : ''}">
+  const videoHtml = (v) => `<p class="hint offline-only">Ohne Internet lässt sich das Video nicht abspielen.</p><div class="video${v.vertical ? ' vertical' : ''}">
     <iframe data-video="${esc(v.key)}" src="${esc(embedUrl(v, location.origin))}" title="Video zum Rezept"
       allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`;
   // Alle Videos und die Bilder stehen gleichzeitig im Kasten, sichtbar ist immer nur eines.
@@ -1706,11 +1804,11 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
 
       <div class="actions">
         ${r.steps.length || r.ingredients.length ? `<button class="btn primary" id="cook-btn">${symbol('pot')}Kochen</button>` : ''}${own ? `
-        <button class="btn" id="plan-btn">Einplanen</button>
-        <a class="btn" href="#/r/${r.id}/bearbeiten">Bearbeiten</a>
-        <button class="btn" id="share">Teilen</button>
-        <button class="btn danger" id="del">Löschen</button>` : session
-    ? '<button class="btn primary" id="copy">In mein Kochbuch übernehmen</button>'
+        <button class="btn needs-net" id="plan-btn">Einplanen</button>
+        <a class="btn needs-net" href="#/r/${r.id}/bearbeiten">Bearbeiten</a>
+        <button class="btn needs-net" id="share">Teilen</button>
+        <button class="btn danger needs-net" id="del">Löschen</button>` : session
+    ? '<button class="btn primary needs-net" id="copy">In mein Kochbuch übernehmen</button>'
     : '<button class="btn primary" id="login-copy">Anmelden, um das Rezept zu übernehmen</button>'}
       </div>
     </article>`;
@@ -3054,7 +3152,9 @@ async function loadLists() {
 async function loadItems(listId) {
   const { data, error } = await supabase.from('shopping_items').select('*').eq('list_id', listId).order('created_at');
   if (error) throw error;
-  return data;
+  // Offline gesetzte Haken gelten, bis sie gespeichert sind.
+  const pending = loadPendingChecks();
+  return data.map((i) => (i.id in pending ? { ...i, checked: pending[i.id] } : i));
 }
 
 // Nimmt die Zutaten eines Plan-Eintrags von allen Listen. Liefert false bei einem Fehler.
@@ -3308,8 +3408,13 @@ async function renderShopping(listId) {
         const item = items.find((i) => i.id === box.dataset.check);
         item.checked = box.checked;
         draw();
+        const pending = loadPendingChecks();
+        const remember = () => { savePendingChecks({ ...loadPendingChecks(), [item.id]: item.checked }); };
+        if (!navigator.onLine) { remember(); return; }
         const { error } = await supabase.from('shopping_items').update({ checked: item.checked }).eq('id', item.id);
+        if (error && isNetworkError(error)) { remember(); toast('Offline gemerkt, wird nachgereicht'); return; }
         if (error) toast(error.message);
+        else if (item.id in pending) { delete pending[item.id]; savePendingChecks(pending); }
       };
     });
     app.querySelectorAll('[data-del]').forEach((b) => {
@@ -3723,6 +3828,8 @@ function renderManage() {
   $('#news-again').onclick = () => openNewsSheet(NEWS.slice(0, 2));
   $('#logout').onclick = async () => {
     await supabase.auth.signOut();
+    // Die zwischengespeicherten Daten gehören zu diesem Konto.
+    window.caches?.delete('kochbuch-daten').catch(() => {});
   };
 }
 
@@ -4374,8 +4481,20 @@ if (isConfigured) {
     // Nur bei echten Wechseln neu zeichnen, nicht beim stillen Token-Refresh.
     if (userChanged || event === 'PASSWORD_RECOVERY' || event === 'SIGNED_OUT') setTimeout(render);
   });
-  const { data } = await supabase.auth.getSession();
-  session = data.session;
+  const { data } = await supabase.auth.getSession().catch(() => ({ data: {} }));
+  session = data.session ?? null;
+  // Ohne Netz kann die Anmeldung nicht erneuert werden; die gespeicherte reicht dann, um die
+  // zwischengespeicherten Daten zu zeigen.
+  if (!session && !navigator.onLine) session = storedSession();
+  if (navigator.onLine) flushPendingChecks();
+}
+
+function storedSession() {
+  try {
+    const key = Object.keys(localStorage).find((k) => /^sb-.*-auth-token$/.test(k));
+    const saved = key && JSON.parse(localStorage.getItem(key));
+    return saved?.user?.id ? saved : null;
+  } catch { return null; }
 }
 render();
 
