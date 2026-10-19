@@ -5,6 +5,13 @@
 
 export const NEWS = [
   {
+    version: '2026-10-19-zutaten-sortieren',
+    title: 'Zutaten löschen und verschieben',
+    lines: [
+      { text: 'Beim Bearbeiten eines Rezepts löschst du eine Zutat, indem du sie nach rechts wischst. An den drei Strichen rechts ziehst du sie an eine andere Stelle.', ziel: '#/hilfe/importieren' },
+    ],
+  },
+  {
     version: '2026-10-18-zutaten-orte',
     title: 'Zutaten und Orte verwalten',
     lines: [
