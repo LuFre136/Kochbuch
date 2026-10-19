@@ -127,6 +127,7 @@ export const HELP = [
       'Du kannst mehrere Listen führen, etwa eine pro Haushalt oder Woche.',
       'Zutaten kommen aus einem Rezept oder von Hand dazu; gleiche Zutaten werden zusammengefasst.',
       'Jede Zutat hat eine Kategorie und mindestens einen Einkaufsort. Wische einen Eintrag nach rechts, um beides zu ändern; oben filterst du die Liste nach Ort.',
+      '„Häufig gekauft“ über der Liste zeigt, was ihr oft abhakt. Ein Tipp setzt den Artikel mit seiner üblichen Menge auf die Liste; langes Drücken blendet ihn aus. Bei geteilten Listen sehen alle dieselben Vorschläge.',
       'Die Sortierung „Ladenweg“ ordnet die Liste so, wie du durch den Laden gehst. Mit Ort-Filter gilt der Ladenweg dieses Orts; ohne Filter steht die Liste nach Orten geordnet und darin nach deren Ladenweg.',
       '„Verwalten“ gibt dir auch einen Einladungslink, mit dem eine Person die Liste mitbearbeiten kann — Änderungen erscheinen bei allen sofort. Jeder Link gilt für eine Person.',
     ],

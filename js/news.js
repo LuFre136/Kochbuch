@@ -5,6 +5,13 @@
 
 export const NEWS = [
   {
+    version: '2026-10-19-haeufig',
+    title: 'Häufig gekauft',
+    lines: [
+      { text: 'Über der Einkaufsliste stehen die Artikel, die du oft kaufst. Ein Tipp setzt sie wieder auf die Liste.', ziel: '#/hilfe/einkauf' },
+    ],
+  },
+  {
     version: '2026-10-19-ladenweg',
     title: 'Ladenweg',
     lines: [

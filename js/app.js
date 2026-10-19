@@ -5,6 +5,7 @@ import {
 import { suggestRecipes, STAPLES } from './pantry.js';
 import {
   additionsFromPlan, findConflict, mergeInto, removeRecipe, removePlanEntry, recipesOnList, plannedIds, formatItemQuantity,
+  frequentSuggestions,
 } from './shopping.js';
 import { PRODUCE, MONTHS, seasonOf, inSeason, seasonalRecipes } from './season.js';
 import { CATEGORIES, guessCategory, categoryKey } from './categories.js';
@@ -44,6 +45,7 @@ let categoriesSaved = true; // false, solange kategorien.sql nicht ausgeführt w
 let places = null; // eigene Einkaufsorte [{ id, name }]; null = noch nicht geladen
 let placesTable = true; // false, solange orte.sql nicht ausgeführt wurde
 let placesSaved = true; // false, solange ingredient_categories keine Spalte places hat
+let frequentTable = true; // false, solange haeufig.sql nicht ausgeführt wurde
 let walkColumn = true; // false, solange shopping_places keine Spalte category_order hat (ladenweg.sql)
 let namesSaved = true; // false, solange ingredient_categories keine Spalte name hat (zutaten.sql)
 let takenName = ''; // Name aus der Registrierung, den inzwischen jemand anderes hat
@@ -3163,6 +3165,34 @@ async function loadItems(listId) {
   return data.map((i) => (i.id in pending ? { ...i, checked: pending[i.id] } : i));
 }
 
+// Häufig gekaufte Artikel einer Liste; ohne haeufig.sql eine leere Liste.
+async function loadFrequent(listId) {
+  if (!frequentTable) return [];
+  const { data, error } = await supabase.from('shopping_frequent').select('*').eq('list_id', listId);
+  if (error) {
+    if (SQL_MISSING.has(error.code)) frequentTable = false;
+    return [];
+  }
+  return data;
+}
+
+// Zählt einen Kauf mit und liefert die neue Liste der häufigen Artikel.
+async function countPurchase(listId, item, frequent) {
+  if (!frequentTable) return frequent;
+  const key = categoryKey(item.name);
+  const { error } = await supabase.rpc('count_purchase', {
+    p_list: listId, p_key: key, p_name: item.name, p_amount: item.amount ?? null, p_unit: item.unit ?? '',
+  });
+  if (error) {
+    if (SQL_MISSING.has(error.code)) frequentTable = false;
+    return frequent;
+  }
+  const now = new Date().toISOString();
+  const old = frequent.find((f) => f.key === key);
+  if (old) return frequent.map((f) => (f === old ? { ...f, count: f.count + 1, name: item.name, amount: item.amount, unit: item.unit, last_bought: now } : f));
+  return [...frequent, { list_id: listId, key, name: item.name, amount: item.amount, unit: item.unit, count: 1, last_bought: now, hidden: false }];
+}
+
 // Nimmt die Zutaten eines Plan-Eintrags von allen Listen. Liefert false bei einem Fehler.
 async function removePlanFromLists(planId) {
   const { data, error } = await supabase.from('shopping_items').select('*');
@@ -3297,6 +3327,7 @@ async function renderShopping(listId) {
   const isOwner = list.owner_id === me;
   const ownCount = lists.filter((l) => l.owner_id === me).length;
   let items = await loadItems(list.id);
+  let frequent = await loadFrequent(list.id);
   const people = await supabase.rpc('list_people', { p_list: list.id });
   const members = (people.data ?? []).filter((p) => !p.is_owner);
   const owner = (people.data ?? []).find((p) => p.is_owner);
@@ -3340,6 +3371,7 @@ async function renderShopping(listId) {
       <input name="item" placeholder="z. B. 1 l Milch" autocomplete="off" enterkeyhint="done" aria-label="Eintrag hinzufügen">
       <button class="btn">Hinzufügen</button>
     </form>
+    <div id="frequent"></div>
     <div id="list-recipes"></div>
     <ul class="shop-items" id="open-items"></ul>
     <div id="done-items"></div>`;
@@ -3375,6 +3407,8 @@ async function renderShopping(listId) {
     $('#done-items').innerHTML = done.length ? `<div class="section-head done-head"><h2>Erledigt (${done.length})</h2>
       <button class="link danger-link" id="clear-done">Erledigte löschen</button></div>
       <ul class="shop-items">${rows(done)}</ul>` : '';
+    const tips = frequentSuggestions(frequent, items, categoryKey, { keep: (f) => !filter || placesOf(f.name).includes(filter) });
+    $('#frequent').innerHTML = tips.length ? `<p class="hint">Häufig gekauft:</p><div class="chips frequent">${tips.map((f) => `<button type="button" class="chip needs-net" data-frequent="${esc(f.key)}" title="Lange drücken: nicht mehr vorschlagen">+ ${esc(f.name)}</button>`).join('')}</div>` : '';
     const recs = recipesOnList(items);
     $('#list-recipes').innerHTML = recs.length ? `<p class="hint">Aus Rezepten:</p><div class="chips static">${recs.map((r) => `<span class="chip tag-chip">${esc(r.title)}
       <button type="button" data-recipe="${esc(r.recipe_id)}" aria-label="${esc(r.title)} von der Liste nehmen">×</button></span>`).join('')}</div>` : '';
@@ -3425,6 +3459,7 @@ async function renderShopping(listId) {
         if (error && isNetworkError(error)) { remember(); toast('Offline gemerkt, wird nachgereicht'); return; }
         if (error) toast(error.message);
         else if (item.id in pending) { delete pending[item.id]; savePendingChecks(pending); }
+        if (!error && item.checked) frequent = await countPurchase(list.id, item, frequent);
       };
     });
     app.querySelectorAll('[data-del]').forEach((b) => {
@@ -3509,6 +3544,48 @@ async function renderShopping(listId) {
     draw();
     input.focus();
   };
+
+  // Häufig gekauft: Tipp setzt den Artikel auf die Liste, langes Drücken blendet ihn aus.
+  const box = $('#frequent');
+  let pressTimer = null;
+  let pressed = false;
+  const hideFrequent = async (key) => {
+    const f = frequent.find((x) => x.key === key);
+    if (!f || !frequentTable) { toast('Ausblenden geht, sobald haeufig.sql ausgeführt ist.'); return; }
+    const { value } = await openSheet(`<h2>${esc(f.name)}</h2><p>Nicht mehr unter „Häufig gekauft“ vorschlagen?</p>
+      <div class="row"><button class="btn primary" value="ok">Nicht mehr vorschlagen</button><button class="btn ghost" value="cancel">Abbrechen</button></div>`);
+    if (value !== 'ok') return;
+    const { error } = await supabase.from('shopping_frequent').update({ hidden: true }).eq('list_id', list.id).eq('key', key);
+    if (error) { toast(error.message); return; }
+    f.hidden = true;
+    draw();
+  };
+  box.addEventListener('pointerdown', (e) => {
+    const chip = e.target.closest('[data-frequent]');
+    if (!chip) return;
+    pressed = false;
+    pressTimer = setTimeout(() => { pressed = true; hideFrequent(chip.dataset.frequent); }, 600);
+  });
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => box.addEventListener(ev, () => clearTimeout(pressTimer)));
+  box.addEventListener('contextmenu', (e) => {
+    const chip = e.target.closest('[data-frequent]');
+    if (!chip) return;
+    e.preventDefault();
+    if (!pressed) { clearTimeout(pressTimer); pressed = true; hideFrequent(chip.dataset.frequent); }
+  });
+  box.addEventListener('click', async (e) => {
+    const chip = e.target.closest('[data-frequent]');
+    if (!chip || pressed) { pressed = false; return; }
+    const f = frequentSuggestions(frequent, items, categoryKey, { limit: Infinity }).find((x) => x.key === chip.dataset.frequent);
+    if (!f) return;
+    chip.disabled = true;
+    const { data, error } = await supabase.from('shopping_items').insert({
+      list_id: list.id, name: f.name, amount: f.amount ?? null, unit: f.unit ?? '', manual: true,
+    }).select().single();
+    if (error) { toast(error.message); chip.disabled = false; return; }
+    if (!items.some((i) => i.id === data.id)) items.push(data);
+    draw();
+  });
 
   const byId = (sel) => app.querySelector(sel);
   byId('#manage').onclick = (e) => {

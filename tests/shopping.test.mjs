@@ -130,3 +130,25 @@ test('einen Plan-Eintrag von der Liste nehmen, andere Tage desselben Rezepts ble
     deletes: ['2'],
   });
 });
+
+import { frequentSuggestions } from '../js/shopping.js';
+
+test('häufig gekauft: die meisten Käufe zuerst, ohne Offenes und Ausgeblendetes', () => {
+  const key = (n) => n.toLowerCase();
+  const frequent = [
+    { key: 'milch', name: 'Milch', count: 5, last_bought: '2026-10-10' },
+    { key: 'brot', name: 'Brot', count: 2, last_bought: '2026-10-12' },
+    { key: 'eier', name: 'Eier', count: 5, last_bought: '2026-10-12' },
+    { key: 'klopapier', name: 'Klopapier', count: 9, last_bought: '2026-10-01', hidden: true },
+  ];
+  const items = [{ name: 'Brot', checked: false }, { name: 'Milch', checked: true }];
+  assert.deepEqual(frequentSuggestions(frequent, items, key).map((f) => f.name), ['Eier', 'Milch']);
+  assert.deepEqual(frequentSuggestions(frequent, items, key, { limit: 1 }).map((f) => f.name), ['Eier']);
+  assert.deepEqual(frequentSuggestions(frequent, [], key, { keep: (f) => f.name !== 'Eier' }).map((f) => f.name), ['Milch', 'Brot']);
+});
+
+test('häufig gekauft: ohne Zählung kommen die abgehakten Einträge', () => {
+  const key = (n) => n.toLowerCase();
+  const items = [{ name: 'Milch', checked: true, amount: 1, unit: 'l' }, { name: 'milch', checked: true }, { name: 'Brot', checked: false }];
+  assert.deepEqual(frequentSuggestions([], items, key), [{ key: 'milch', name: 'Milch', amount: 1, unit: 'l' }]);
+});

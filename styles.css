@@ -781,3 +781,5 @@ body.offline .needs-net, body.offline .swipe-btn, body.offline #add-item button 
 body.offline .offline-only { display: block; margin: 0 0 6px; }
 .shop-items li.group-head.place-head { color: var(--text); font-size: 0.85rem; }
 .shop-items li.group-head.place-head .sym { margin-right: 4px; }
+.chips.frequent { margin-bottom: 10px; }
+.chips.frequent .chip { flex: none; white-space: nowrap; -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }

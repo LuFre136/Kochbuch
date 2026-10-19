@@ -156,3 +156,24 @@ export function formatItemQuantity(item) {
   }
   return [amount == null ? '' : formatAmount(amount), unit].filter(Boolean).join(' ');
 }
+
+// Häufig gekauft: die Vorschläge oben auf der Liste. frequent sind die Zeilen aus
+// shopping_frequent ({ key, name, amount, unit, count, last_bought, hidden }), items die
+// Einträge der Liste, keyOf macht aus einem Namen den Vergleichsschlüssel. Artikel, die schon
+// offen auf der Liste stehen, und ausgeblendete fehlen. Gibt es noch keine Zählung, kommen
+// die schon abgehakten Einträge der Liste als Vorschlag.
+export function frequentSuggestions(frequent, items, keyOf, { limit = 12, keep = () => true } = {}) {
+  const open = new Set(items.filter((i) => !i.checked).map((i) => keyOf(i.name)));
+  let list = (frequent ?? []).filter((f) => !f.hidden)
+    .sort((a, b) => b.count - a.count || String(b.last_bought).localeCompare(String(a.last_bought)));
+  if (!(frequent ?? []).length) {
+    const seen = new Set();
+    list = items.filter((i) => i.checked).filter((i) => {
+      const k = keyOf(i.name);
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    }).map((i) => ({ key: keyOf(i.name), name: i.name, amount: i.amount, unit: i.unit }));
+  }
+  return list.filter((f) => !open.has(f.key) && keep(f)).slice(0, limit);
+}
