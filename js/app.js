@@ -241,7 +241,24 @@ function ring() {
   }
 }
 
+// Auf dem iPhone kann statt des Timers in der App der Timer der Uhr-App laufen, über einen
+// Kurzbefehl, den man einmal selbst anlegt. Die Einstellung bleibt auf dem Gerät.
+const PHONE_SHORTCUT = 'Kochbuch-Timer';
+const isApple = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+function usePhoneTimer() {
+  try { return localStorage.getItem('kochbuch.phoneTimer') === '1'; } catch { return false; }
+}
+function setUsePhoneTimer(on) {
+  try { localStorage.setItem('kochbuch.phoneTimer', on ? '1' : '0'); } catch { /* privater Modus */ }
+}
+const phoneTimerUrl = (seconds) => `shortcuts://run-shortcut?name=${encodeURIComponent(PHONE_SHORTCUT)}&input=text&text=${Math.round(seconds)}`;
+
 function addTimer(label, seconds) {
+  if (usePhoneTimer()) {
+    location.href = phoneTimerUrl(seconds);
+    toast(`Timer der Uhr-App: ${formatCountdown(seconds * 1000)}`);
+    return;
+  }
   unlockAudio();
   timers = startTimer(timers, { label, seconds });
   saveTimers();
@@ -719,6 +736,7 @@ async function render() {
     else if (first === 'orte') await renderPlaces();
     else if (first === 'ladenweg' && id) await renderWalk(id);
     else if (first === 'hilfe') renderHelp(id);
+    else if (first === 'timer') renderTimerSettings();
     else if (first === 'geteilt') await renderSharing();
     else if (first === 'plan') await renderPlan();
     else if (first === 'einkauf') await renderShopping(id);
@@ -1134,7 +1152,7 @@ const PLACEHOLDER = `<div class="placeholder" aria-hidden="true">${symbol('pot')
 
 function renderTabbar(first) {
   if (!session) { tabbar.hidden = true; return; }
-  const active = { '': 'list', r: 'list', neu: 'list', kombinieren: 'list', kochen: 'pantry', saison: 'pantry', plan: 'plan', einkauf: 'shop', verwalten: 'manage', zutaten: 'manage', orte: 'manage', ladenweg: 'manage', geteilt: 'manage', kochbuch: 'manage', hilfe: 'manage', liste: 'shop' }[first || ''];
+  const active = { '': 'list', r: 'list', neu: 'list', kombinieren: 'list', kochen: 'pantry', saison: 'pantry', plan: 'plan', einkauf: 'shop', verwalten: 'manage', zutaten: 'manage', orte: 'manage', ladenweg: 'manage', timer: 'manage', geteilt: 'manage', kochbuch: 'manage', hilfe: 'manage', liste: 'shop' }[first || ''];
   tabbar.hidden = false;
   tabbar.innerHTML = TABS.map(([key, href, label]) => `<a href="${href}" class="${key === active ? 'active' : ''}"${key === active ? ' aria-current="page"' : ''}>
     <svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[key]}</svg><span>${label}</span></a>`).join('');
@@ -3903,6 +3921,10 @@ function renderManage() {
         <strong>Orte</strong>
         <small>Einkaufsorte wie Supermarkt oder Markt anlegen, umbenennen, sortieren und löschen</small>
       </a>
+      <a class="manage-item card-panel" href="#/timer">
+        <strong>Timer</strong>
+        <small>${usePhoneTimer() ? 'Timer laufen in der Uhr-App' : 'Timer laufen in dieser App'}; auf dem iPhone geht auch die Uhr-App</small>
+      </a>
       <a class="manage-item card-panel" href="#/hilfe">
         <strong>Hilfe</strong>
         <small>Kurze Anleitungen zu allen Bereichen der App</small>
@@ -3922,6 +3944,35 @@ function renderManage() {
     // Die zwischengespeicherten Daten gehören zu diesem Konto.
     window.caches?.delete('kochbuch-daten').catch(() => {});
   };
+}
+
+// Einstellung, ob Timer in der App oder über einen Kurzbefehl in der Uhr-App laufen.
+function renderTimerSettings() {
+  const apple = isApple();
+  app.innerHTML = `
+    <a class="back" href="#/verwalten">← Verwalten</a>
+    <h1>Timer</h1>
+    <p class="hint">Ein Tipp auf eine Zeitangabe in einem Schritt startet einen Timer. Normalerweise läuft er in dieser App und klingelt nur, solange sie offen ist. Auf dem iPhone und iPad kann er stattdessen in der Uhr-App laufen; dann klingelt er auch bei gesperrtem Display.</p>
+    ${apple ? '' : '<p class="notice">Das geht nur auf dem iPhone und iPad. Android-Handys lassen Webseiten den Timer der Uhr nicht stellen.</p>'}
+    <label class="check"><input type="checkbox" id="phone-timer"${usePhoneTimer() ? ' checked' : ''}> Timer der Uhr-App verwenden</label>
+    <section class="card-panel timer-howto">
+      <h2>Einmal einrichten</h2>
+      <p>Die App startet den Timer über einen Kurzbefehl. So legst du ihn an:</p>
+      <ol>
+        <li>Öffne die App „Kurzbefehle“ und tippe oben rechts auf „+“.</li>
+        <li>Tippe oben auf den Namen und nenne den Kurzbefehl genau <strong>${esc(PHONE_SHORTCUT)}</strong>.</li>
+        <li>Tippe auf „Aktion hinzufügen“, suche „Timer starten“ und wähle die Aktion aus.</li>
+        <li>Tippe in der Aktion auf die Zahl, dann auf „Kurzbefehleingabe“. Stelle die Einheit auf „Sekunden“.</li>
+        <li>Tippe auf „Fertig“.</li>
+      </ol>
+      <p>Beim Starten wechselt das Handy kurz in die App „Kurzbefehle“. Mit „Kochbuch“ oben links oder einem Wisch kommst du zurück. Beim ersten Mal fragt das iPhone, ob der Kurzbefehl laufen darf.</p>
+      <button type="button" class="btn" id="phone-timer-test">Mit 10 Sekunden ausprobieren</button>
+    </section>`;
+  $('#phone-timer').onchange = (e) => {
+    setUsePhoneTimer(e.target.checked);
+    toast(e.target.checked ? 'Timer laufen jetzt in der Uhr-App.' : 'Timer laufen jetzt in dieser App.');
+  };
+  $('#phone-timer-test').onclick = () => { location.href = phoneTimerUrl(10); };
 }
 
 // Alle Zutaten mit Kategorie und Orten, nach Kategorien gruppiert. Neue Zutaten lassen sich

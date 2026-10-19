@@ -5,6 +5,13 @@
 
 export const NEWS = [
   {
+    version: '2026-10-19-uhr-timer',
+    title: 'Timer in der Uhr-App',
+    lines: [
+      { text: 'Auf dem iPhone kann ein Timer aus einem Schritt jetzt in der Uhr-App laufen und klingelt auch bei gesperrtem Display. Einschalten unter „Verwalten“ → „Timer“.', ziel: '#/timer' },
+    ],
+  },
+  {
     version: '2026-10-19-haeufig',
     title: 'Häufig gekauft',
     lines: [
