@@ -783,3 +783,9 @@ body.offline .offline-only { display: block; margin: 0 0 6px; }
 .shop-items li.group-head.place-head .sym { margin-right: 4px; }
 .chips.frequent { margin-bottom: 10px; }
 .chips.frequent .chip { flex: none; white-space: nowrap; -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
+
+.timer-howto { margin-top: 16px; }
+.timer-howto h2 { margin-top: 0; }
+.timer-howto ol { padding-left: 1.3em; margin: 8px 0 12px; }
+.timer-howto li { margin-bottom: 6px; }
+.timer-howto strong { white-space: nowrap; }

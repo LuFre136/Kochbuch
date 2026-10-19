@@ -20,6 +20,7 @@ export const HELP = [
   {
     id: 'beimkochen',
     title: 'Kochmodus, Haken, Timer und Mengen',
+    routes: ['timer'],
     lines: [
       '„Kochen“ im Rezept öffnet den Kochmodus: zuerst die Zutaten, dann jeder Schritt groß auf einer eigenen Seite. Wische oder tippe auf „Weiter“ und „Zurück“.',
       'Solange der Kochmodus offen ist, bleibt das Display an. Hat ein Schritt einen Zeitstempel, öffnet „Video ab …“ das Video unten auf der Seite.',
@@ -29,6 +30,7 @@ export const HELP = [
       'Zeitangaben in den Schritten wie „20 Minuten“ sind eingerahmt. Ein Tipp darauf startet einen Timer; bei einer Spanne wie „10–15 Minuten“ läuft er auf den kleineren Wert.',
       'Laufende Timer stehen unten auf jeder Seite, mit Pause und Abbrechen. Mehrere Timer können gleichzeitig laufen.',
       'Ein Timer klingelt nur, solange die App offen ist. Ist sie zu, läuft die Zeit trotzdem weiter, und beim nächsten Öffnen meldet er sich.',
+      'Auf dem iPhone und iPad kann der Timer stattdessen in der Uhr-App laufen und klingelt dann auch bei gesperrtem Display. Das stellst du unter „Verwalten“ → „Timer“ ein; dort steht auch, wie du den nötigen Kurzbefehl einmal anlegst.',
       'In den Schritten steht hinter jeder Zutat ihre Menge für die eingestellten Portionen, auch bei Anteilen wie „die Hälfte des Mehls“ oder „die restliche Butter“. Der Schalter „Mengen in den Schritten“ blendet sie aus.',
       'Kommt eine Zutat ohne Anteil in mehreren Schritten vor, steht die Menge nur beim ersten Mal. Nennt ein Schritt die Zutat anders als die Zutatenliste, findet die App sie nicht.',
     ],
