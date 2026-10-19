@@ -35,6 +35,8 @@ Jede Zutat hat eine Kategorie (Obst, Gemüse, Fleisch & Wurst …). Kommt eine Z
 
 Die Übersicht lässt sich nach **A–Z**, **Beste zuerst** (Bewertung), **Neueste zuerst** (Erstelldatum) und **Zuletzt gekocht** sortieren. Steht an einem Rezept ein Datum, zeigt die Karte es als Zusatzinfo („gekocht gestern“, „gekocht vor 5 Tagen“, sonst das Datum), und in der Rezeptansicht steht es bei den Zeiten.
 
+Unter den Tags stehen Zeit-Chips („bis 15 Min.“ bis „bis 1 Std.“), auch bei „Was kochen?“ und im Saisonkalender (`timeFilter` in `js/app.js`, `filterByTime` in `js/sorting.js`). Gezählt wird `total_minutes`, ersatzweise `cook_minutes`. Rezepte ohne beides fallen bei aktivem Filter weg; der Hinweis darunter schaltet auf „ohne Zeitangabe“ um, damit man sie findet. Der Filter gilt bis zum Abwählen oder Neustart der App.
+
 Das Datum setzt die App selbst: fällt ein eingeplanter Tag aus dem Essensplan, weil er vorbei ist, gilt das Rezept an diesem Tag als gekocht. Das späteste solche Datum gewinnt, ein älteres überschreibt kein neueres. Ohne [`supabase/gekocht.sql`](supabase/gekocht.sql) fehlt die Spalte `last_cooked`; dann entfällt die Sortierung „Zuletzt gekocht“ und die App arbeitet sonst unverändert weiter.
 
 ## Beim Kochen: Haken und Timer

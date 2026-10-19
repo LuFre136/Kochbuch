@@ -42,3 +42,19 @@ export function cookedFromPlan(rows) {
   }
   return latest;
 }
+
+// Filter nach Zeit: "bis 15 Min." usw. Gezählt wird die Gesamtzeit, ersatzweise die
+// Koch-/Backzeit. 'none' zeigt nur Rezepte ohne Zeitangabe, damit man sie nachtragen kann.
+export const TIME_LIMITS = [[15, 'bis 15 Min.'], [30, 'bis 30 Min.'], [45, 'bis 45 Min.'], [60, 'bis 1 Std.']];
+
+export const recipeMinutes = (r) => r.total_minutes ?? r.cook_minutes ?? null;
+
+// Teilt eine Liste nach dem Limit auf: shown = passende, unknown = Anzahl ohne Zeitangabe,
+// die das Limit ausblendet. of holt das Rezept aus einem Listeneintrag.
+export function filterByTime(list, limit, of = (x) => x) {
+  if (!limit) return { shown: list, unknown: 0 };
+  if (limit === 'none') return { shown: list.filter((x) => recipeMinutes(of(x)) == null), unknown: 0 };
+  const shown = list.filter((x) => { const m = recipeMinutes(of(x)); return m != null && m <= limit; });
+  const unknown = list.filter((x) => recipeMinutes(of(x)) == null).length;
+  return { shown, unknown };
+}

@@ -766,3 +766,7 @@ body.has-timers .toast { bottom: calc(150px + env(safe-area-inset-bottom)); }
 .cook-video .video iframe { max-height: 38vh; }
 body.cooking .timers { z-index: 30; bottom: calc(80px + env(safe-area-inset-bottom)); }
 body.cooking .toast { z-index: 35; }
+.time-filter { margin: -6px 0 12px; }
+.time-filter .chip { flex: none; white-space: nowrap; }
+.time-filter .sym { margin-right: 4px; }
+.time-unknown { margin: -6px 0 12px; }

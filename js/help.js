@@ -11,6 +11,7 @@ export const HELP = [
     lines: [
       'Die Übersicht zeigt alle deine Rezepte. Oben suchst du nach Titel oder Zutat und filterst über die Tags.',
       'Mit dem Knopf rechts oben sortierst du nach Titel, Bewertung, Anlagedatum oder danach, wann du ein Rezept zuletzt gekocht hast.',
+      'Die Zeit-Chips („bis 30 Min.“ …) zeigen nur Rezepte, die in der Gesamtzeit fertig sind, ersatzweise in der Koch-/Backzeit. Es gibt sie auch bei „Was kochen?“ und im Saisonkalender. Rezepte ohne Zeitangabe fallen dabei weg; der Hinweis darunter zeigt sie dir zum Nachtragen.',
       '„+ Rezept“ legt ein neues an — entweder aus einem Link, Video oder Foto, oder selbst getippt.',
       'Im Rezept änderst du die Anzahl Portionen; die Mengen der Zutaten werden mitgerechnet.',
       'Ein Wisch nach links oder rechts auf einem Rezept führt zu seinen Alternativen, falls es welche hat.',

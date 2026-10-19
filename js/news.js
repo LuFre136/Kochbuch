@@ -5,6 +5,13 @@
 
 export const NEWS = [
   {
+    version: '2026-10-19-zeitfilter',
+    title: 'Filter nach Zeit',
+    lines: [
+      { text: 'In der Übersicht, bei „Was kochen?“ und im Saisonkalender zeigen „bis 15 Min.“ bis „bis 1 Std.“ nur Rezepte, die so schnell fertig sind.', ziel: '#/hilfe/rezepte' },
+    ],
+  },
+  {
     version: '2026-10-19-kochmodus',
     title: 'Kochmodus',
     lines: [

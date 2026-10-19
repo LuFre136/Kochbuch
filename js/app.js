@@ -18,7 +18,9 @@ import {
   pairOf, alternativeIds, alternativeGroup, suggestAlternatives, relatedAlternatives,
   filterByTags, tagMatches,
 } from './alternatives.js';
-import { SORTS, sortRecipes, formatCooked, cookedFromPlan } from './sorting.js';
+import {
+  SORTS, sortRecipes, formatCooked, cookedFromPlan, TIME_LIMITS, filterByTime,
+} from './sorting.js';
 import { HELP, helpFor, helpTopic } from './help.js';
 import { NEWS, newsSince, latestVersion } from './news.js';
 import {
@@ -52,6 +54,7 @@ let secretColumn = true; // false, solange familiengeheimnis.sql nicht ausgefüh
 let pendingNew = null; // Vorbelegung für ein neues Rezept, z. B. aus dem Kombinieren
 let activeTag = null;
 let listSort = 'name';
+let timeLimit = null; // Filter nach Zeit: null, 15, 30, 45, 60 oder 'none' (ohne Zeitangabe)
 let recoveringPassword = false;
 
 const collator = new Intl.Collator('de', { sensitivity: 'base' });
@@ -1113,6 +1116,7 @@ async function renderPantry() {
       ${sharedToggle(sharedBooks)}
     </div>
     <div id="pantry-tags"></div>
+    <div id="pantry-time"></div>
     <div id="suggestions"></div>`;
 
   const byId = new Map(all.map((r) => [r.id, r]));
@@ -1131,11 +1135,12 @@ async function renderPantry() {
     const out = $('#suggestions');
     if (!state.items.length) {
       $('#pantry-tags').innerHTML = '';
+      $('#pantry-time').innerHTML = '';
       out.innerHTML = '<p class="hint">Gib ein, was du im Kühlschrank und Vorrat hast. Dann zeige ich dir, welche Rezepte du damit kochen kannst.</p>';
       return;
     }
     const found = suggestRecipes(all, state.items, { useStaples: state.useStaples });
-    const hits = tagFilter($('#pantry-tags'), found.map((h) => h.recipe), pantryTags, draw)(found);
+    const hits = timeFilter($('#pantry-time'), draw, (h) => h.recipe)(tagFilter($('#pantry-tags'), found.map((h) => h.recipe), pantryTags, draw)(found));
     if (!hits.length) {
       out.innerHTML = '<p class="hint">Kein Rezept passt dazu. Füge weitere Zutaten hinzu.</p>';
       return;
@@ -1172,6 +1177,32 @@ async function renderPantry() {
   $('#staples').onchange = (e) => { state.useStaples = e.target.checked; draw(); };
   bindSharedToggle(renderPantry);
   draw();
+}
+
+// Zeit-Chips über einer Liste. Liefert eine Funktion, die die Liste filtert und darunter
+// meldet, wie viele Rezepte ohne Zeitangabe dabei wegfallen (antippbar: zeigt genau die).
+function timeFilter(container, onChange, of = (x) => x) {
+  if (!container) return (list) => list;
+  container.innerHTML = `<div class="chips time-filter" role="group" aria-label="Zeit">${TIME_LIMITS.map(([m, label]) => `<button type="button" class="chip${timeLimit === m ? ' active' : ''}" data-limit="${m}" aria-pressed="${timeLimit === m}">${symbol('clock')}${label}</button>`).join('')}
+    ${timeLimit === 'none' ? '<button type="button" class="chip active" data-limit="none" aria-pressed="true">ohne Zeitangabe ×</button>' : ''}</div>
+    <p class="hint time-unknown" hidden></p>`;
+  container.querySelectorAll('[data-limit]').forEach((chip) => {
+    chip.onclick = () => {
+      const v = chip.dataset.limit === 'none' ? 'none' : Number(chip.dataset.limit);
+      timeLimit = timeLimit === v ? null : v;
+      onChange();
+    };
+  });
+  return (list) => {
+    const { shown, unknown } = filterByTime(list, timeLimit, of);
+    const note = container.querySelector('.time-unknown');
+    note.hidden = !unknown;
+    if (unknown) {
+      note.innerHTML = `<button type="button" class="link">${unknown === 1 ? '1 Rezept' : `${unknown} Rezepte`} ohne Zeitangabe ausgeblendet</button>`;
+      note.querySelector('button').onclick = () => { timeLimit = 'none'; onChange(); };
+    }
+    return shown;
+  };
 }
 
 // Tag-Filter für Trefferlisten: angeboten werden nur Tags, die in den Treffern vorkommen
@@ -1224,6 +1255,7 @@ async function renderSeason() {
       <h2>Passende Rezepte</h2>
       ${sharedToggle(sharedBooks)}
       <div id="season-tags"></div>
+      <div id="season-time"></div>
       <div id="season-results"></div>
     </section>
     <details class="year card-panel">
@@ -1261,7 +1293,7 @@ async function renderSeason() {
 
     const produce = st.focus.size ? current.filter((p) => st.focus.has(p.name)) : current;
     const found = seasonalRecipes(all, produce);
-    const hits = tagFilter($('#season-tags'), found.map((h) => h.recipe), st.tags, draw)(found);
+    const hits = timeFilter($('#season-time'), draw, (h) => h.recipe)(tagFilter($('#season-tags'), found.map((h) => h.recipe), st.tags, draw)(found));
     $('#season-results').innerHTML = hits.length ? `<div class="suggestions">${hits.map((h) => `<a class="suggestion${altStack(h.recipe)}" href="${recipeHref(h.recipe)}">
       ${h.recipe.images[0] ? `<img src="${esc(imageUrl(h.recipe.images[0]))}" alt="" loading="lazy">` : PLACEHOLDER}
       <div><h3>${esc(h.recipe.title)}${altMark(h.recipe, byId)}</h3>${fromLine(h.recipe)}<p class="ok">Saison: ${h.matches.map((p) => esc(p.name)).join(', ')}</p></div></a>`).join('')}</div>`
@@ -1297,6 +1329,7 @@ async function renderList() {
       </select>
     </div>
     ${tags.length ? `<div class="chips">${tags.map((t) => `<button class="chip${t === activeTag ? ' active' : ''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}</div>` : ''}
+    <div id="list-time"></div>
     <div id="results" class="grid"></div>`;
 
   const byId = new Map(all.map((r) => [r.id, r]));
@@ -1305,7 +1338,7 @@ async function renderList() {
     const q = listQuery.trim().toLowerCase();
     const found = all.filter((r) => (!activeTag || r.tags.includes(activeTag))
       && (!q || [r.title, r.description, ...r.tags].some((s) => s.toLowerCase().includes(q))));
-    const shown = sortRecipes(found, listSort, collator.compare);
+    const shown = sortRecipes(timeFilter($('#list-time'), draw)(found), listSort, collator.compare);
     results.innerHTML = shown.length ? shown.map((r) => `<div class="swipe" data-id="${r.id}">
         <div class="swipe-actions start"><button type="button" class="swipe-btn danger" data-act="delete">Löschen</button></div>
         <div class="swipe-actions end"><button type="button" class="swipe-btn" data-act="plan">Einplanen</button><button type="button" class="swipe-btn accent" data-act="share">Teilen</button></div>
@@ -1329,10 +1362,10 @@ async function renderList() {
   };
   $('#q').oninput = (e) => { listQuery = e.target.value; draw(); };
   $('#sort').onchange = (e) => { listSort = e.target.value; draw(); };
-  app.querySelectorAll('.chip').forEach((chip) => {
+  app.querySelectorAll('.chip[data-tag]').forEach((chip) => {
     chip.onclick = () => {
       activeTag = activeTag === chip.dataset.tag ? null : chip.dataset.tag;
-      app.querySelectorAll('.chip').forEach((c) => c.classList.toggle('active', c.dataset.tag === activeTag));
+      app.querySelectorAll('.chip[data-tag]').forEach((c) => c.classList.toggle('active', c.dataset.tag === activeTag));
       draw();
     };
   });
