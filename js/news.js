@@ -5,6 +5,13 @@
 
 export const NEWS = [
   {
+    version: '2026-10-19-mengen-schritte',
+    title: 'Mengen in den Schritten',
+    lines: [
+      { text: 'Hinter jeder Zutat in der Zubereitung steht ihre Menge, passend zu den Portionen. „Die Hälfte des Mehls“ bekommt auch nur die Hälfte.', ziel: '#/hilfe/beimkochen' },
+    ],
+  },
+  {
     version: '2026-10-19-haken-timer',
     title: 'Abhaken und Timer beim Kochen',
     lines: [

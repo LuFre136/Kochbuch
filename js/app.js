@@ -26,7 +26,7 @@ import {
   scaleIngredient, combinedTitle, stepsForCombine, combinedImages,
 } from './combine.js';
 import {
-  durationParts, formatCountdown, checksFor, toggleCheck, clearChecks,
+  stepAmounts, stepPieces, formatCountdown, checksFor, toggleCheck, clearChecks,
   startTimer, timerLeft, timerDone, pauseTimer, resumeTimer, removeTimer,
 } from './cooking.js';
 
@@ -210,11 +210,25 @@ function saveChecks(all) {
   try { localStorage.setItem('kochbuch.checks', JSON.stringify(all)); } catch { /* privater Modus */ }
 }
 
-// Schritttext mit antippbaren Zeitangaben.
-function stepTextHtml(text, label) {
-  return durationParts(text).map((p) => (p.seconds
-    ? `<button type="button" class="timer-chip" data-timer="${p.seconds}" data-label="${esc(label)}" aria-label="Timer ${esc(p.text)} starten">${symbol('clock')}${esc(p.text)}</button>`
-    : esc(p.text))).join('');
+// Mengen in den Schritten lassen sich abschalten; die Einstellung bleibt auf dem Gerät.
+function showStepAmounts() {
+  try { return localStorage.getItem('kochbuch.stepAmounts') !== '0'; } catch { return true; }
+}
+function setShowStepAmounts(on) {
+  try { localStorage.setItem('kochbuch.stepAmounts', on ? '1' : '0'); } catch { /* privater Modus */ }
+}
+
+// Schritttext mit antippbaren Zeitangaben und, wenn gewünscht, den Mengen der Zutaten.
+// amountOf(amount) liefert den Text für eine Menge, z. B. "125 g".
+function stepTextHtml(text, label, amounts = [], amountOf = null) {
+  return stepPieces(text, amountOf ? amounts : []).map((p) => {
+    if (p.amount) {
+      const q = amountOf(p.amount);
+      return q ? ` <span class="step-qty">(${esc(q)})</span>` : '';
+    }
+    if (p.seconds) return `<button type="button" class="timer-chip" data-timer="${p.seconds}" data-label="${esc(label)}" aria-label="Timer ${esc(p.text)} starten">${symbol('clock')}${esc(p.text)}</button>`;
+    return esc(p.text);
+  }).join('');
 }
 
 async function loadRecipes(force = false) {
@@ -1439,6 +1453,10 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
       data-media="${esc(t.key)}" role="tab" aria-selected="${i === 0}">${esc(t.label)}</button>`).join('')}</div>` : ''}
     <div class="media" id="media-box">${mediaHtml()}</div></div>` : '';
 
+  // Wo in den Schritten Mengen stehen; ohne einen Treffer gibt es auch keinen Schalter dafür.
+  const stepQty = stepAmounts(r.steps.map(stepText), r.ingredients);
+  const hasStepAmounts = stepQty.some((list) => list.length);
+
   // Alternativen liegen als Kartenstapel hinter der aktuellen Karte: in die Richtungen,
   // in die auch gewischt werden kann.
   const prev = index > 0 ? group[index - 1] : null;
@@ -1484,15 +1502,9 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
 
       ${mediaBlock}
 
-      ${r.steps.length ? `<section><h2>Zubereitung</h2>
-        <ol class="steps">${r.steps.map((s, si) => {
-    const v = stepVideo(s, videos);
-    const t = v ? stepTime(s) : null;
-    // Bei mehreren Videos steht am Zeitstempel, in welchem er liegt.
-    const n = videos.length > 1 ? `${videos.indexOf(v) + 1} · ` : '';
-    return `<li class="checkable" data-step="${si}">${t != null ? `<button type="button" class="seek" data-t="${t}" data-video="${esc(v.key)}"
-      aria-label="Video ${videos.length > 1 ? `${videos.indexOf(v) + 1} ` : ''}ab ${formatTime(t)} abspielen">▶ ${n}${formatTime(t)}</button> ` : ''}${stepTextHtml(stepText(s), `${r.title} · Schritt ${si + 1}`)}</li>`;
-  }).join('')}</ol></section>` : ''}
+      ${r.steps.length ? `<section><div class="section-head"><h2>Zubereitung</h2>
+        ${hasStepAmounts ? `<label class="check small"><input type="checkbox" id="step-amounts"${showStepAmounts() ? ' checked' : ''}> Mengen in den Schritten</label>` : ''}</div>
+        <ol class="steps" id="steps"></ol></section>` : ''}
       <p class="checks-bar" id="checks-bar" hidden><button type="button" class="link" id="clear-checks">Haken entfernen</button></p>
 
       ${r.notes ? `<section><h2>Notizen</h2><p class="notes">${linkify(r.notes)}</p></section>` : ''}
@@ -1528,16 +1540,37 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
     showAltHint();
   }
 
+  // Schritte mit Zeitstempeln, Timern und den Mengen der Zutaten für die eingestellten Portionen.
+  const stepList = $('#steps');
+  const drawSteps = () => {
+    if (stepList) {
+      const factor = servings / r.servings;
+      const amountOf = showStepAmounts()
+        ? ({ ing, share }) => formatQuantity(r.ingredients[ing], factor * share) : null;
+      stepList.innerHTML = r.steps.map((s, si) => {
+        const v = stepVideo(s, videos);
+        const t = v ? stepTime(s) : null;
+        // Bei mehreren Videos steht am Zeitstempel, in welchem er liegt.
+        const n = videos.length > 1 ? `${videos.indexOf(v) + 1} · ` : '';
+        return `<li class="checkable" data-step="${si}">${t != null ? `<button type="button" class="seek" data-t="${t}" data-video="${esc(v.key)}"
+          aria-label="Video ${videos.length > 1 ? `${videos.indexOf(v) + 1} ` : ''}ab ${formatTime(t)} abspielen">▶ ${n}${formatTime(t)}</button> ` : ''}${stepTextHtml(stepText(s), `${r.title} · Schritt ${si + 1}`, stepQty[si], amountOf)}</li>`;
+      }).join('');
+    }
+    drawChecks();
+  };
+  const stepBox = $('#step-amounts');
+  if (stepBox) stepBox.onchange = () => { setShowStepAmounts(stepBox.checked); drawSteps(); };
+
   const ingList = $('#ing');
   // keepInput: beim Tippen im Feld bleibt die Eingabe stehen, nur die Mengen rechnen neu.
   const drawIngredients = ({ keepInput = false } = {}) => {
-    if (!ingList) return;
+    if (!ingList) { drawSteps(); return; }
     const srv = $('#srv');
     if (srv && !keepInput) srv.value = String(servings);
     $('#srv-unit').textContent = servings === 1 ? 'Portion' : 'Portionen';
     const factor = servings / r.servings;
     ingList.innerHTML = r.ingredients.map((i, ii) => `<li class="checkable" data-ing="${ii}"><span class="qty">${esc(formatQuantity(i, factor))}</span><span>${ingredientLabel(i)}</span></li>`).join('');
-    drawChecks();
+    drawSteps();
   };
   // Haken: ein Tipp auf eine Zutat oder einen Schritt streicht sie durch. Sie bleiben auf dem
   // Gerät, bis man sie entfernt oder 12 Stunden lang nichts mehr abhakt.
@@ -1580,7 +1613,6 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
     srvInput.addEventListener('blur', () => { srvInput.value = String(servings); });
   }
   drawIngredients();
-  drawChecks();
 
   // Bilder: waagerecht durchwischen, Zähler und Pfeile für Rechner.
   const bindGallery = () => {
@@ -1683,8 +1715,10 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
   });
 
   // Zeitstempel bei den Schritten: zum passenden Video und dort an die Stelle springen.
-  app.querySelectorAll('.seek').forEach((b) => {
-    b.onclick = () => showMedia(b.dataset.video, Number(b.dataset.t));
+  // Die Schritte werden bei jeder Portionenänderung neu gezeichnet, darum hängt der Klick am Ganzen.
+  stepList?.addEventListener('click', (e) => {
+    const b = e.target.closest('.seek');
+    if (b) showMedia(b.dataset.video, Number(b.dataset.t));
   });
 
   if (!own) {

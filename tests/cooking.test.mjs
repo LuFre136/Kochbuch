@@ -80,3 +80,57 @@ test('Timer laufen über die Endzeit, lassen sich anhalten und fortsetzen', () =
   assert.equal(timerDone(timers[0], 640000), true);
   assert.deepEqual(removeTimer(timers, t.id), []);
 });
+
+import { stepAmounts, stepPieces } from '../js/cooking.js';
+
+const ZUTATEN = [
+  { amount: 250, unit: 'g', name: 'Mehl', note: 'Type 405' }, { amount: 100, unit: 'g', name: 'Butter' },
+  { amount: 80, unit: 'g', name: 'Zucker' }, { amount: 3, unit: '', name: 'Eier' }, { amount: null, unit: '', name: 'Pfeffer' },
+  { amount: 20, unit: 'g', name: 'Puderzucker' }, { amount: 200, unit: 'ml', name: 'Milch' },
+];
+// Kurzform: je Schritt [Zutat, Anteil]
+const shares = (steps) => stepAmounts(steps, ZUTATEN).map((list) => list.map((a) => [ZUTATEN[a.ing].name, a.share]));
+
+test('setzt die Menge hinter die Zutat im Schritt', () => {
+  assert.deepEqual(shares(['Mehl, Zucker und Eier mischen.']), [[['Mehl', 1], ['Zucker', 1], ['Eier', 1]]]);
+  const [list] = stepAmounts(['Mehl unterrühren.'], ZUTATEN);
+  assert.deepEqual(list, [{ at: 4, ing: 0, share: 1 }]);
+});
+
+test('erkennt Anteile wie Hälfte, Drittel und Rest', () => {
+  assert.deepEqual(shares([
+    'Die Hälfte des Mehls unterrühren.',
+    'Ein Drittel der Butter schmelzen, dann die Eier dazu.',
+    'Restliches Mehl und die restliche Butter dazugeben.',
+    '1/4 der Milch erwärmen, den Rest der Milch kalt dazu.',
+  ]), [
+    [['Mehl', 0.5]],
+    [['Butter', 0.333], ['Eier', 1]],
+    [['Mehl', 0.5], ['Butter', 0.667]],
+    [['Milch', 0.25]],                                          // dieselbe Zutat zählt je Schritt einmal
+  ]);
+  assert.deepEqual(shares(['Zwei Drittel der Milch und drei Viertel des Zuckers verrühren.']), [[['Milch', 0.667], ['Zucker', 0.75]]]);
+});
+
+test('ohne Anteil steht die Menge nur beim ersten Mal', () => {
+  assert.deepEqual(shares(['Butter schmelzen.', 'Form mit Butter einfetten.']), [[['Butter', 1]], []]);
+  // "Rest" ohne vorherigen Anteil und "etwas" bekommen keine Menge.
+  assert.deepEqual(shares(['Die restliche Milch dazu.', 'Etwas Zucker drüberstreuen.']), [[], []]);
+});
+
+test('Zutaten ohne Menge und ähnliche Wörter', () => {
+  assert.deepEqual(shares(['Mit Pfeffer würzen.']), [[]]);
+  assert.deepEqual(shares(['Mit Puderzucker bestreuen.']), [[['Puderzucker', 1]]]); // nicht der Zucker
+  assert.deepEqual(shares(['Den Brei umrühren, ein Ei ist nicht drin.']), [[['Eier', 1]]]);
+  assert.deepEqual(shares(['Weizenmehl sieben.']), [[['Mehl', 1]]]);
+});
+
+test('Stücke für die Anzeige: Text, Zeiten und Mengen in Reihenfolge', () => {
+  const text = 'Mehl einrühren und 10 Minuten ruhen lassen.';
+  const [amounts] = stepAmounts([text], ZUTATEN);
+  assert.deepEqual(stepPieces(text, amounts), [
+    { text: 'Mehl' }, { amount: { ing: 0, share: 1 } }, { text: ' einrühren und ' },
+    { text: '10 Minuten', seconds: 600 }, { text: ' ruhen lassen.' },
+  ]);
+  assert.deepEqual(stepPieces('Ofen an.'), [{ text: 'Ofen an.' }]);
+});

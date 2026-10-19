@@ -731,3 +731,6 @@ dialog.sheet.full {
 @keyframes timer-blink { 50% { background: var(--danger); } }
 body.has-timers main { padding-bottom: calc(140px + env(safe-area-inset-bottom)); }
 body.has-timers .toast { bottom: calc(150px + env(safe-area-inset-bottom)); }
+.step-qty { color: var(--muted); font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.section-head .check.small { margin: 0; font-size: 0.85rem; align-items: center; }
+.section-head .check.small input { margin-top: 0; }
