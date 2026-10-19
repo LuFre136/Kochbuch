@@ -5,6 +5,13 @@
 
 export const NEWS = [
   {
+    version: '2026-10-19-ladenweg',
+    title: 'Ladenweg',
+    lines: [
+      { text: 'Unter „Verwalten“ → „Orte“ legst du für jeden Laden fest, in welcher Reihenfolge die Abteilungen liegen. Die Einkaufsliste sortiert unter „Ladenweg“ danach.', ziel: '#/orte' },
+    ],
+  },
+  {
     version: '2026-10-19-offline',
     title: 'Ohne Internet lesen',
     lines: [

@@ -127,18 +127,20 @@ export const HELP = [
       'Du kannst mehrere Listen führen, etwa eine pro Haushalt oder Woche.',
       'Zutaten kommen aus einem Rezept oder von Hand dazu; gleiche Zutaten werden zusammengefasst.',
       'Jede Zutat hat eine Kategorie und mindestens einen Einkaufsort. Wische einen Eintrag nach rechts, um beides zu ändern; oben filterst du die Liste nach Ort.',
+      'Die Sortierung „Ladenweg“ ordnet die Liste so, wie du durch den Laden gehst. Mit Ort-Filter gilt der Ladenweg dieses Orts; ohne Filter steht die Liste nach Orten geordnet und darin nach deren Ladenweg.',
       '„Verwalten“ gibt dir auch einen Einladungslink, mit dem eine Person die Liste mitbearbeiten kann — Änderungen erscheinen bei allen sofort. Jeder Link gilt für eine Person.',
     ],
   },
   {
     id: 'zutaten',
     title: 'Zutaten und Einkaufsorte',
-    routes: ['zutaten', 'orte'],
+    routes: ['zutaten', 'orte', 'ladenweg'],
     lines: [
       'Unter „Verwalten“ → „Zutaten“ stehen alle deine Zutaten nach Kategorien. Tippe eine an, um ihre Kategorie und ihre Einkaufsorte zu ändern; das gilt in allen Rezepten und Einkaufslisten.',
       'Oben erfasst du neue Zutaten, bevor sie in einem Rezept vorkommen. Die App schlägt Kategorie und Orte vor.',
       'Jede Zutat hat mindestens einen Ort. Löschst du einen Ort, bekommen Zutaten, die nur diesen hatten, wieder einen vorgeschlagenen.',
       'Unter „Verwalten“ → „Orte“ legst du Einkaufsorte an, benennst sie um, sortierst sie mit den Pfeilen und löschst sie. Ein Ort bleibt immer.',
+      '„Ladenweg“ neben einem Ort legt fest, in welcher Reihenfolge die Abteilungen dort liegen, zum Beispiel erst Obst und Gemüse, dann Brot. Zwei Supermärkte mit anderem Aufbau legst du als zwei Orte an.',
     ],
   },
   {

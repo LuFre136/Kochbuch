@@ -104,6 +104,8 @@ Unter „Verwalten“ → „Orte“ (`#/orte`) legt man Einkaufsorte an, benenn
 
 Im Plan setzt „Auf die Einkaufsliste“ die Zutaten eines eingeplanten Rezepts (umgerechnet auf die geplanten Portionen) auf eine Liste. Jeder Eintrag merkt sich, aus welchen Rezepten er stammt. Steht eine Zutat schon offen auf der Liste und passen die Einheiten (gleich oder umrechenbar wie g/kg), fragt die App, ob zusammengerechnet oder ein neuer Eintrag angelegt werden soll. Über die Rezept-Chips oben in der Liste nimmt man alles wieder heraus, was ein Rezept beigetragen hat; von Hand eingetragene Mengen bleiben stehen.
 
+
+**Ladenweg:** Jeder Ort kann eine eigene Reihenfolge der Kategorien haben (`shopping_places.category_order`, aus [`supabase/ladenweg.sql`](supabase/ladenweg.sql); `null` = Reihenfolge aus `js/categories.js`). Eingestellt wird sie unter „Verwalten“ → „Orte“ → „Ladenweg“ (`#/ladenweg/<id>`). Die Sortierung „Ladenweg“ der Einkaufsliste nimmt mit Ort-Filter den Weg dieses Orts; ohne Filter ordnet sie erst nach Orten (bei mehreren Orten einer Zutat der erste in der Orte-Reihenfolge) und darin nach deren Weg, mit Zwischenüberschriften für Ort und Kategorie (`categoryOrder`, `walkKey` in `js/places.js`). Ohne die SQL-Datei gilt überall die vorgegebene Reihenfolge.
 ## Saisonkalender
 
 Unter „Was kochen?“ → „Saison“ zeigt die App, welches Obst und Gemüse in Deutschland gerade frisch (oder auf Wunsch als Lagerware) zu haben ist, und darunter die eigenen Rezepte, die davon etwas enthalten. Die Daten stehen in [`js/season.js`](js/season.js) und lassen sich dort ergänzen.

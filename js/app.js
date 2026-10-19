@@ -7,8 +7,8 @@ import {
   additionsFromPlan, findConflict, mergeInto, removeRecipe, removePlanEntry, recipesOnList, plannedIds, formatItemQuantity,
 } from './shopping.js';
 import { PRODUCE, MONTHS, seasonOf, inSeason, seasonalRecipes } from './season.js';
-import { CATEGORIES, guessCategory, categoryKey, categoryRank } from './categories.js';
-import { DEFAULT_PLACES, guessPlaces } from './places.js';
+import { CATEGORIES, guessCategory, categoryKey } from './categories.js';
+import { DEFAULT_PLACES, guessPlaces, categoryOrder, walkKey } from './places.js';
 import { linkify } from './links.js';
 import {
   videoOf, videosOf, videoKey, embedUrl, seekTo, askPlayerState, pausePlayer, playMuted, playerState, isPlayerMessage, stepText, stepTime, stepVideo,
@@ -44,6 +44,7 @@ let categoriesSaved = true; // false, solange kategorien.sql nicht ausgeführt w
 let places = null; // eigene Einkaufsorte [{ id, name }]; null = noch nicht geladen
 let placesTable = true; // false, solange orte.sql nicht ausgeführt wurde
 let placesSaved = true; // false, solange ingredient_categories keine Spalte places hat
+let walkColumn = true; // false, solange shopping_places keine Spalte category_order hat (ladenweg.sql)
 let namesSaved = true; // false, solange ingredient_categories keine Spalte name hat (zutaten.sql)
 let takenName = ''; // Name aus der Registrierung, den inzwischen jemand anderes hat
 let myName; // Benutzername: undefined = noch nicht geladen, null = fehlt noch, false = benutzername.sql nicht eingerichtet
@@ -532,11 +533,13 @@ async function loadCategories() {
 // Eigene Einkaufsorte; wer noch keine hat, bekommt die Standard-Orte.
 async function loadPlaces() {
   if (places) return places;
-  const { data, error } = await supabase.from('shopping_places').select('id, name, position').order('position');
+  let { data, error } = await supabase.from('shopping_places').select('id, name, position, category_order').order('position');
+  walkColumn = !error;
+  if (error) ({ data, error } = await supabase.from('shopping_places').select('id, name, position').order('position'));
   placesTable = !error;
-  places = data?.length ? data.map(({ id, name }) => ({ id, name })) : DEFAULT_PLACES.map((p) => ({ ...p }));
+  places = data?.length ? data.map(({ id, name, category_order: order }) => ({ id, name, order: order ?? null })) : DEFAULT_PLACES.map((p) => ({ ...p, order: null }));
   if (placesTable && !data.length) {
-    const { error: e } = await supabase.from('shopping_places').insert(places.map((p, i) => ({ ...p, position: i })));
+    const { error: e } = await supabase.from('shopping_places').insert(places.map(({ id, name }, i) => ({ id, name, position: i })));
     if (e) console.warn(e);
   }
   return places;
@@ -544,6 +547,8 @@ async function loadPlaces() {
 
 const placeIds = () => (places ?? DEFAULT_PLACES).map((p) => p.id);
 const placeName = (id) => (places ?? DEFAULT_PLACES).find((p) => p.id === id)?.name;
+// Ladenweg eines Orts: alle Kategorien in seiner Reihenfolge.
+const walkOf = (id) => categoryOrder((places ?? []).find((p) => p.id === id)?.order, CATEGORIES);
 
 // Eigene Kategorie einer Zutat, sonst ein Vorschlag anhand des Namens.
 function categoryOf(name) {
@@ -710,6 +715,7 @@ async function render() {
     else if (first === 'verwalten') renderManage();
     else if (first === 'zutaten') await renderIngredients();
     else if (first === 'orte') await renderPlaces();
+    else if (first === 'ladenweg' && id) await renderWalk(id);
     else if (first === 'hilfe') renderHelp(id);
     else if (first === 'geteilt') await renderSharing();
     else if (first === 'plan') await renderPlan();
@@ -1126,7 +1132,7 @@ const PLACEHOLDER = `<div class="placeholder" aria-hidden="true">${symbol('pot')
 
 function renderTabbar(first) {
   if (!session) { tabbar.hidden = true; return; }
-  const active = { '': 'list', r: 'list', neu: 'list', kombinieren: 'list', kochen: 'pantry', saison: 'pantry', plan: 'plan', einkauf: 'shop', verwalten: 'manage', zutaten: 'manage', orte: 'manage', geteilt: 'manage', kochbuch: 'manage', hilfe: 'manage', liste: 'shop' }[first || ''];
+  const active = { '': 'list', r: 'list', neu: 'list', kombinieren: 'list', kochen: 'pantry', saison: 'pantry', plan: 'plan', einkauf: 'shop', verwalten: 'manage', zutaten: 'manage', orte: 'manage', ladenweg: 'manage', geteilt: 'manage', kochbuch: 'manage', hilfe: 'manage', liste: 'shop' }[first || ''];
   tabbar.hidden = false;
   tabbar.innerHTML = TABS.map(([key, href, label]) => `<a href="${href}" class="${key === active ? 'active' : ''}"${key === active ? ' aria-current="page"' : ''}>
     <svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[key]}</svg><span>${label}</span></a>`).join('');
@@ -3307,7 +3313,7 @@ async function renderShopping(listId) {
         ${places.map((p) => `<option value="${esc(p.id)}"${placeFilter() === p.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}
       </select>
       <select id="item-sort" aria-label="Sortierung">
-        ${[['added', 'Hinzugefügt'], ['name', 'A–Z'], ['category', 'Nach Kategorie'], ['recipe', 'Nach Rezept']].map(([v, l]) => `<option value="${v}"${shoppingSort() === v ? ' selected' : ''}>${l}</option>`).join('')}
+        ${[['added', 'Hinzugefügt'], ['name', 'A–Z'], ['category', 'Ladenweg'], ['recipe', 'Nach Rezept']].map(([v, l]) => `<option value="${v}"${shoppingSort() === v ? ' selected' : ''}>${l}</option>`).join('')}
       </select>
     </div>
     <section class="card-panel share-section list-settings" id="list-settings" hidden>
@@ -3341,7 +3347,7 @@ async function renderShopping(listId) {
   const draw = () => {
     const sort = shoppingSort();
     const filter = placeIds().includes(placeFilter()) ? placeFilter() : '';
-    const sorted = sortItems(items, sort).filter((i) => !filter || placesOf(i.name).includes(filter));
+    const sorted = sortItems(items, sort, filter).filter((i) => !filter || placesOf(i.name).includes(filter));
     const open = sorted.filter((i) => !i.checked);
     const done = sorted.filter((i) => i.checked);
     // Abhaken nur über die Checkbox; nach rechts wischen zeigt „Ändern“ (Menge und Kategorie).
@@ -3354,11 +3360,15 @@ async function renderShopping(listId) {
         <button class="icon-btn" data-del="${i.id}" aria-label="${esc(i.name)} löschen">×</button>
       </div></li>`;
     // Nach Rezept: Zwischenüberschriften, sobald ein neues Rezept beginnt.
+    // Auf dem Ladenweg ohne Ort-Filter steht zusätzlich der Ort darüber, sobald einer beginnt.
+    const placeOfItem = (x) => walkOfItem(x, filter).place;
     const rows = (list) => list.map((item, i) => {
       const groupBy = sort === 'category' ? (x) => categoryOf(x.name) : groupOf;
       const group = groupBy(item);
-      const head = (sort === 'recipe' || sort === 'category') && (i === 0 || groupBy(list[i - 1]) !== group) ? `<li class="group-head">${esc(group)}</li>` : '';
-      return head + row(item);
+      const newPlace = sort === 'category' && !filter && (i === 0 || placeOfItem(list[i - 1]) !== placeOfItem(item));
+      const placeHead = newPlace && places.length > 1 ? `<li class="group-head place-head">${symbol('pin')}${esc(placeName(placeOfItem(item)) ?? '')}</li>` : '';
+      const head = (sort === 'recipe' || sort === 'category') && (newPlace || i === 0 || groupBy(list[i - 1]) !== group) ? `<li class="group-head">${esc(group)}</li>` : '';
+      return placeHead + head + row(item);
     }).join('');
     $('#open-items').innerHTML = open.length ? rows(open)
       : `<li class="hint empty-list">${done.length ? 'Alles erledigt.' : filter ? `Für ${esc(placeName(filter))} steht nichts auf der Liste.` : 'Die Liste ist leer. Füge oben etwas hinzu oder setze im Plan Rezepte auf die Liste.'}</li>`;
@@ -3564,11 +3574,15 @@ function shoppingSort() {
 
 const groupOf = (item) => item.sources?.[0]?.title ?? 'Von Hand';
 
-function sortItems(items, sort) {
+// Wo eine Zutat auf dem Ladenweg liegt; filter = der Ort, nach dem die Liste gefiltert ist.
+const walkOfItem = (item, filter) => walkKey(placesOf(item.name), categoryOf(item.name), placeIds(), walkOf, filter);
+
+function sortItems(items, sort, filter = '') {
   const list = [...items];
   if (sort === 'name') list.sort((a, b) => collator.compare(a.name, b.name));
   if (sort === 'category') {
-    list.sort((a, b) => categoryRank(categoryOf(a.name)) - categoryRank(categoryOf(b.name)) || collator.compare(a.name, b.name));
+    const keys = new Map(list.map((i) => [i, walkOfItem(i, filter).rank]));
+    list.sort((a, b) => keys.get(a)[0] - keys.get(b)[0] || keys.get(a)[1] - keys.get(b)[1] || collator.compare(a.name, b.name));
   }
   if (sort === 'recipe') {
     list.sort((a, b) => (!a.sources?.length - !b.sources?.length)
@@ -3898,7 +3912,7 @@ async function renderPlaces() {
   app.innerHTML = `
     <a class="back" href="#/verwalten">← Verwalten</a>
     <h1>Orte</h1>
-    <p class="hint">Wo du einkaufst. Die Orte gelten für alle deine Einkaufslisten; welche Orte eine Zutat hat, stellst du unter <a href="#/zutaten">Zutaten</a> ein. Tippe einen Ort an, um ihn umzubenennen oder zu löschen; mit den Pfeilen änderst du die Reihenfolge, auch im Filter der Einkaufsliste.</p>
+    <p class="hint">Wo du einkaufst. Die Orte gelten für alle deine Einkaufslisten; welche Orte eine Zutat hat, stellst du unter <a href="#/zutaten">Zutaten</a> ein. Tippe einen Ort an, um ihn umzubenennen oder zu löschen; mit den Pfeilen änderst du die Reihenfolge, auch im Filter der Einkaufsliste. Unter „Ladenweg“ legst du fest, in welcher Reihenfolge die Abteilungen in diesem Laden liegen.</p>
     <ul class="people place-list" id="place-list"></ul>
     <form class="import-row" id="add-place">
       <input name="place" placeholder="Neuer Ort, z. B. Bäcker" maxlength="40" autocomplete="off" enterkeyhint="done" aria-label="Neuer Ort">
@@ -3916,6 +3930,7 @@ async function renderPlaces() {
   };
   const draw = () => {
     $('#place-list').innerHTML = places.map((p, i) => `<li><button type="button" class="place-name" data-place="${esc(p.id)}">${esc(p.name)}</button><span class="row">
+      <a class="btn small" href="#/ladenweg/${encodeURIComponent(p.id)}" aria-label="Ladenweg für ${esc(p.name)}">Ladenweg</a>
       <button type="button" class="btn small" data-up="${i}" aria-label="${esc(p.name)} nach oben"${i === 0 ? ' disabled' : ''}>↑</button>
       <button type="button" class="btn small" data-down="${i}" aria-label="${esc(p.name)} nach unten"${i === places.length - 1 ? ' disabled' : ''}>↓</button></span></li>`).join('');
     const move = async (i, j) => {
@@ -3968,6 +3983,57 @@ async function renderPlaces() {
     input.value = '';
     draw();
   };
+}
+
+// Ladenweg eines Orts: die Kategorien in der Reihenfolge, in der man durch den Laden geht.
+async function renderWalk(placeId) {
+  await loadCategories();
+  const place = places.find((p) => p.id === placeId);
+  if (!place) { location.hash = '#/orte'; return; }
+  let order = walkOf(place.id);
+  app.innerHTML = `
+    <a class="back" href="#/orte">← Orte</a>
+    <h1>Ladenweg: ${esc(place.name)}</h1>
+    <p class="hint">Bring die Abteilungen in die Reihenfolge, in der du durch ${esc(place.name)} gehst. Was es dort nicht gibt, schiebst du nach unten. Auf der Einkaufsliste sortiert „Ladenweg“ danach.</p>
+    ${walkColumn ? '' : '<p class="notice">Damit der Ladenweg gespeichert wird, muss in Supabase noch supabase/ladenweg.sql ausgeführt werden.</p>'}
+    <ol class="people place-list walk-list" id="walk-list"></ol>
+    <div class="row"><button type="button" class="btn ghost" id="walk-reset">Zurücksetzen</button></div>`;
+  const save = async () => {
+    if (!walkColumn) { toast('Dafür fehlt noch ladenweg.sql.'); return false; }
+    const custom = order.join() === CATEGORIES.join() ? null : order;
+    const { error } = await supabase.from('shopping_places').update({ category_order: custom }).eq('id', place.id);
+    if (error) { toast(error.message); return false; }
+    place.order = custom;
+    return true;
+  };
+  const draw = () => {
+    $('#walk-list').innerHTML = order.map((c, i) => `<li><span>${esc(c)}</span><span class="row">
+      <button type="button" class="btn small" data-up="${i}" aria-label="${esc(c)} nach oben"${i === 0 ? ' disabled' : ''}>↑</button>
+      <button type="button" class="btn small" data-down="${i}" aria-label="${esc(c)} nach unten"${i === order.length - 1 ? ' disabled' : ''}>↓</button></span></li>`).join('');
+    $('#walk-reset').disabled = order.join() === CATEGORIES.join();
+  };
+  const move = async (i, j) => {
+    const before = order;
+    order = [...order];
+    [order[i], order[j]] = [order[j], order[i]];
+    draw();
+    if (!await save()) { order = before; draw(); }
+    // Der Knopf bleibt unter dem Finger, damit man mehrmals hintereinander tippen kann.
+    app.querySelector(`[data-${j < i ? 'up' : 'down'}="${j}"]`)?.focus();
+  };
+  $('#walk-list').onclick = (e) => {
+    const b = e.target.closest('[data-up], [data-down]');
+    if (!b) return;
+    const i = Number(b.dataset.up ?? b.dataset.down);
+    move(i, b.dataset.up != null ? i - 1 : i + 1);
+  };
+  $('#walk-reset').onclick = async () => {
+    const before = order;
+    order = [...CATEGORIES];
+    draw();
+    if (!await save()) { order = before; draw(); }
+  };
+  draw();
 }
 
 const helpLines = (topic) => `<ul class="help-lines">${topic.lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>`;
