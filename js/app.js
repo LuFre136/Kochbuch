@@ -59,6 +59,7 @@ let activeTag = null;
 let listSort = 'name';
 let timeLimit = null; // Filter nach Zeit: null, 15, 30, 45, 60 oder 'none' (ohne Zeitangabe)
 let recoveringPassword = false;
+let mailNotice = ''; // Hinweis, wenn sich ein Link aus einer Mail in diesem Browser nicht einlösen ließ
 
 const collator = new Intl.Collator('de', { sensitivity: 'base' });
 
@@ -719,7 +720,8 @@ function route() {
 
 async function render() {
   if (!isConfigured) return renderSetup();
-  if (recoveringPassword) return renderNewPassword();
+  // Während das Formular mit dem Code aus der Mail noch speichert, bleibt es stehen.
+  if (recoveringPassword) return $('#reset') ? undefined : renderNewPassword();
   const [first, id, action, extra] = route();
   renderTabbar(first);
   leaveShoppingList();
@@ -734,6 +736,11 @@ async function render() {
     return guarded(() => renderInvite(id));
   }
   if (!session) {
+    if (mailNotice) {
+      const hint = mailNotice;
+      mailNotice = '';
+      return renderLogin(hint);
+    }
     return renderLogin({
       einladung: 'Melde dich an oder registriere dich, um das geteilte Kochbuch zu sehen.',
       liste: 'Melde dich an oder registriere dich, um die geteilte Einkaufsliste mitzubearbeiten.',
@@ -1099,14 +1106,81 @@ function renderLogin(hint = '') {
       form.querySelectorAll('button').forEach((b) => { b.disabled = false; });
     }
   };
-  $('#forgot').onclick = async () => {
+  $('#forgot').onclick = () => {
     const email = form.email.value.trim();
-    if (!email) { msg.textContent = 'Gib zuerst deine E-Mail-Adresse ein.'; return; }
+    if (!email || !form.email.checkValidity()) { msg.textContent = 'Gib zuerst deine E-Mail-Adresse ein.'; form.email.focus(); return; }
+    renderResetCode(email);
+  };
+}
+
+// Passwort vergessen: Die Mail enthält einen Code (und einen Link). Der Code wird hier in der
+// App eingegeben. Das klappt auch, wenn die Mail auf einem anderen Gerät oder im Browser statt
+// in der App vom Home-Bildschirm geöffnet wird; der Link geht nur im selben Browser.
+async function renderResetCode(email) {
+  nav.innerHTML = '';
+  tabbar.hidden = true;
+  app.innerHTML = `
+    <form class="auth card-panel" id="reset">
+      <h1>Passwort zurücksetzen</h1>
+      <p class="hint" id="sent">Wir schicken eine Mail an <strong>${esc(email)}</strong> …</p>
+      <label>Code aus der Mail <input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6,10}" maxlength="10" required></label>
+      <label>Neues Passwort <input type="password" name="password" autocomplete="new-password" minlength="6" required></label>
+      <button class="btn primary">Passwort speichern</button>
+      <div class="row">
+        <button type="button" class="link" id="resend">Mail noch einmal schicken</button>
+        <button type="button" class="link" id="back-login">Zurück zur Anmeldung</button>
+      </div>
+      <p class="hint" id="msg"></p>
+    </form>`;
+  const form = $('#reset');
+  const send = async () => {
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
       redirectTo: location.origin + location.pathname,
     });
-    msg.textContent = error ? error.message : 'Wir haben dir eine Mail zum Zurücksetzen geschickt.';
+    $('#sent').innerHTML = error
+      ? esc(/rate limit|seconds/i.test(error.message)
+        ? 'Es wurden gerade zu viele Mails verschickt. Bitte warte etwas und versuche es dann noch einmal.'
+        : error.message)
+      : `Wir haben eine Mail an <strong>${esc(email)}</strong> geschickt. Gib den Code daraus hier ein, zusammen mit deinem neuen Passwort. Die Mail kann ein paar Minuten brauchen; schau auch im Spam-Ordner nach.`;
   };
+  $('#resend').onclick = send;
+  $('#back-login').onclick = () => renderLogin();
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const msg = () => $('#msg');
+    msg().textContent = '';
+    form.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+    // Der Code meldet an. Bis das neue Passwort gespeichert ist, bleibt die Seite
+    // „Neues Passwort“ stehen, damit niemand ohne neues Passwort in der App landet.
+    recoveringPassword = true;
+    const { error } = await supabase.auth.verifyOtp({ email, token: form.code.value.trim(), type: 'recovery' });
+    if (error) {
+      recoveringPassword = false;
+      msg().textContent = /expired|invalid/i.test(error.message)
+        ? 'Der Code stimmt nicht oder ist abgelaufen. Lass dir eine neue Mail schicken.' : error.message;
+      form.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+      return;
+    }
+    const saved = await supabase.auth.updateUser({ password: form.password.value });
+    if (saved.error) {
+      // Angemeldet ist man jetzt; die Seite „Neues Passwort“ lässt es noch einmal versuchen.
+      if (!$('#pw')) renderNewPassword();
+      $('#msg').textContent = passwordError(saved.error);
+      return;
+    }
+    recoveringPassword = false;
+    toast('Passwort geändert');
+    render();
+  };
+  await send();
+}
+
+function passwordError(err) {
+  if (/different from the old/i.test(err.message)) return 'Das neue Passwort muss sich vom alten unterscheiden.';
+  if (/at least|short/i.test(err.message)) return 'Das Passwort ist zu kurz.';
+  if (/weak|pwned|easy to guess/i.test(err.message)) return 'Dieses Passwort ist zu leicht zu erraten. Bitte wähle ein anderes.';
+  if (/reauthenticat/i.test(err.message)) return 'Bitte melde dich ab und setze das Passwort über „Passwort vergessen?“ zurück.';
+  return err.message;
 }
 
 function renderNewPassword() {
@@ -1121,7 +1195,7 @@ function renderNewPassword() {
   $('#pw').onsubmit = async (e) => {
     e.preventDefault();
     const { error } = await supabase.auth.updateUser({ password: e.target.password.value });
-    if (error) { $('#msg').textContent = error.message; return; }
+    if (error) { $('#msg').textContent = passwordError(error); return; }
     recoveringPassword = false;
     toast('Passwort geändert');
     render();
@@ -3598,6 +3672,11 @@ async function renderShopping(listId) {
     if (!items.some((i) => i.id === data.id)) items.push(data);
     rememberCategories([data.name]);
     draw();
+    // Gespeichert ist der Eintrag; der Ort-Filter blendet ihn aber vielleicht aus.
+    const filter = placeIds().includes(placeFilter()) ? placeFilter() : '';
+    if (filter && !placesOf(data.name).includes(filter)) {
+      toast(`„${data.name}“ steht auf der Liste, ist aber ausgeblendet: Der Filter zeigt nur ${placeName(filter)}.`);
+    }
     input.focus();
   };
 
@@ -3971,17 +4050,36 @@ function renderManage() {
         <strong>Was ist neu</strong>
         <small>Die Änderungen der letzten Fassungen noch einmal ansehen</small>
       </button>
+      <button type="button" class="manage-item card-panel" id="change-password">
+        <strong>Passwort ändern</strong>
+        <small>Ein neues Passwort für dein Konto festlegen</small>
+      </button>
       <button type="button" class="manage-item card-panel" id="logout">
         <strong>Abmelden</strong>
         <small>Angemeldet als ${esc(session.user.email)}</small>
       </button>
     </nav>`;
   $('#news-again').onclick = () => openNewsSheet(NEWS.slice(0, 2));
+  $('#change-password').onclick = () => changePassword();
   $('#logout').onclick = async () => {
     await supabase.auth.signOut();
     // Die zwischengespeicherten Daten gehören zu diesem Konto.
     window.caches?.delete('kochbuch-daten').catch(() => {});
   };
+}
+
+async function changePassword(hint = '') {
+  const { value, form } = await openSheet(`<h2>Passwort ändern</h2>
+    ${hint ? `<p class="hint error">${esc(hint)}</p>` : ''}
+    <input type="email" name="email" value="${esc(session.user.email ?? '')}" autocomplete="username" hidden>
+    <label>Neues Passwort <input type="password" name="password" autocomplete="new-password" minlength="6" required></label>
+    <label>Noch einmal <input type="password" name="repeat" autocomplete="new-password" minlength="6" required></label>
+    <div class="row"><button class="btn primary" value="ok">Speichern</button><button class="btn ghost" value="cancel" formnovalidate>Abbrechen</button></div>`);
+  if (value !== 'ok') return;
+  if (form.password.value !== form.repeat.value) { changePassword('Die beiden Passwörter sind nicht gleich.'); return; }
+  const { error } = await supabase.auth.updateUser({ password: form.password.value });
+  if (error) { changePassword(passwordError(error)); return; }
+  toast('Passwort geändert');
 }
 
 // Einstellung, ob Timer in der App oder über einen Kurzbefehl in der Uhr-App laufen.
@@ -4713,8 +4811,19 @@ if (isConfigured) {
     // Nur bei echten Wechseln neu zeichnen, nicht beim stillen Token-Refresh.
     if (userChanged || event === 'PASSWORD_RECOVERY' || event === 'SIGNED_OUT') setTimeout(render);
   });
+  // Rückkehr aus einer Mail (Bestätigung oder Passwort): ?code=… oder ein Fehler in der Adresse.
+  const back = new URLSearchParams(location.search + '&' + location.hash.replace(/^#\/?/, ''));
+  const fromMail = back.has('code') || back.has('error_description');
   const { data } = await supabase.auth.getSession().catch(() => ({ data: {} }));
   session = data.session ?? null;
+  if (fromMail) {
+    if (session) mailNotice = '';
+    else if (back.has('error_description')) mailNotice = 'Der Link aus der Mail ist abgelaufen oder wurde schon benutzt. Zum Zurücksetzen des Passworts tippe auf „Passwort vergessen?“ und gib den Code aus der neuen Mail ein.';
+    // Der Link wurde in einem anderen Browser geöffnet als dem, in dem die Mail angefordert wurde.
+    // Eine Bestätigung der E-Mail-Adresse hat trotzdem geklappt, ein Passwort-Link nicht.
+    else mailNotice = 'Falls du gerade deine E-Mail-Adresse bestätigt hast: Melde dich jetzt an. Wolltest du dein Passwort zurücksetzen, tippe auf „Passwort vergessen?“ und gib den Code aus der Mail hier ein; der Link funktioniert nur im selben Browser.';
+    history.replaceState(null, '', location.pathname + (back.has('error_description') ? '' : location.hash));
+  }
   // Ohne Netz kann die Anmeldung nicht erneuert werden; die gespeicherte reicht dann, um die
   // zwischengespeicherten Daten zu zeigen.
   if (!session && !navigator.onLine) session = storedSession();
