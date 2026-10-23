@@ -163,6 +163,16 @@ export const HELP = [
       'Abmelden findest du unter „Verwalten“, unter den anderen Einträgen.',
     ],
   },
+  {
+    id: 'konto',
+    title: 'Konto und Passwort',
+    lines: [
+      'Du meldest dich mit deiner E-Mail-Adresse und deinem Passwort an. Dein Benutzername ist das, was andere von dir sehen.',
+      'Passwort vergessen: Gib auf der Anmeldeseite deine E-Mail-Adresse ein und tippe auf „Passwort vergessen?“. Du bekommst eine Mail mit einem Code. Gib ihn in der App ein, zusammen mit deinem neuen Passwort. Die Mail kann ein paar Minuten brauchen; schau auch im Spam-Ordner nach.',
+      'Der Link in der Mail funktioniert nur im selben Browser, in dem du die Mail angefordert hast. Auf dem iPhone ist die App vom Home-Bildschirm ein anderer Browser als Safari, deshalb ist der Code der sichere Weg.',
+      'Angemeldet änderst du dein Passwort unter „Verwalten“ → „Passwort ändern“.',
+    ],
+  },
 ];
 
 export function helpTopic(id) {

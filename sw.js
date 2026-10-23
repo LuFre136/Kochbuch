@@ -4,7 +4,7 @@
 //   die App bekommt Bescheid, von wann sie ist.
 // - Bilder und die Supabase-Bibliothek von esm.sh: aus dem Cache, wenn schon da. Dieser
 //   Cache bleibt bei Updates der App erhalten.
-const CACHE = 'kochbuch-v38';
+const CACHE = 'kochbuch-v39';
 const DATA = 'kochbuch-daten';
 const MEDIA = 'kochbuch-bilder';
 const SUPABASE = 'https://rgjwlpxrzfcrjyzxetyy.supabase.co';

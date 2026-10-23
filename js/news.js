@@ -5,6 +5,14 @@
 
 export const NEWS = [
   {
+    version: '2026-10-23-passwort',
+    title: 'Passwort vergessen und ändern',
+    lines: [
+      { text: '„Passwort vergessen?“ schickt jetzt eine Mail mit einem Code, den du direkt in der App eingibst. Das klappt auch, wenn du die Mail auf einem anderen Gerät liest.', ziel: '#/hilfe/konto' },
+      { text: 'Unter „Verwalten“ → „Passwort ändern“ legst du ein neues Passwort fest, während du angemeldet bist.', ziel: '#/verwalten' },
+    ],
+  },
+  {
     version: '2026-10-19-uhr-timer',
     title: 'Timer in der Uhr-App',
     lines: [
