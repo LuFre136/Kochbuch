@@ -288,6 +288,7 @@ legend { font-weight: 600; padding: 0 4px; }
   background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 999px;
   font-weight: 600; z-index: 20;
 }
+.toast.error { background: var(--danger); color: #fff; border-radius: 14px; text-align: center; }
 
 @media (max-width: 420px) {
   .brand { font-size: 1rem; }
