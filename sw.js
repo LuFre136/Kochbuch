@@ -4,7 +4,7 @@
 //   die App bekommt Bescheid, von wann sie ist.
 // - Bilder und die Supabase-Bibliothek von esm.sh: aus dem Cache, wenn schon da. Dieser
 //   Cache bleibt bei Updates der App erhalten.
-const CACHE = 'kochbuch-v38';
+const CACHE = 'kochbuch-v39';
 const DATA = 'kochbuch-daten';
 const MEDIA = 'kochbuch-bilder';
 const SUPABASE = 'https://rgjwlpxrzfcrjyzxetyy.supabase.co';
@@ -34,6 +34,12 @@ async function tellOffline(clientId, at) {
   client?.postMessage({ type: 'kochbuch-offline', at });
 }
 
+// Meldet der Seite, dass wieder Daten aus dem Netz kommen.
+async function tellOnline(clientId) {
+  const client = clientId && await self.clients.get(clientId);
+  client?.postMessage({ type: 'kochbuch-online' });
+}
+
 // Lesezugriffe auf die Datenbank: Antwort merken (mit Zeitpunkt), ohne Netz die gemerkte.
 async function dataFirst(event) {
   const cache = await caches.open(DATA);
@@ -44,6 +50,7 @@ async function dataFirst(event) {
       const headers = new Headers(res.headers);
       headers.set('x-kochbuch-saved', new Date().toISOString());
       cache.put(event.request, new Response(body, { status: res.status, statusText: res.statusText, headers }));
+      tellOnline(event.clientId);
     }
     return res;
   } catch (err) {

@@ -95,12 +95,21 @@ function hostOf(url) {
   try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; }
 }
 
-function toast(message) {
+function toast(message, { error = false } = {}) {
   const el = document.createElement('div');
-  el.className = 'toast';
+  el.className = error ? 'toast error' : 'toast';
   el.textContent = message;
+  if (error) el.setAttribute('role', 'alert');
   document.body.append(el);
-  setTimeout(() => el.remove(), 3500);
+  setTimeout(() => el.remove(), error ? 7000 : 3500);
+}
+
+// Meldung, wenn eine Änderung nicht gespeichert wurde. Bleibt länger stehen und ist rot.
+function notSaved(error) {
+  const reason = isNetworkError(error) ? 'Keine Verbindung zum Server, bitte nochmal versuchen.'
+    : error?.code === '42501' ? 'Keine Berechtigung, vielleicht wurdest du aus der Liste entfernt.'
+    : (error?.message ?? '');
+  toast(`Nicht gespeichert. ${reason}`.trim(), { error: true });
 }
 
 // ---------- Offline ----------
@@ -142,8 +151,12 @@ function setOnline() {
   flushPendingChecks().then(() => { if (session) render(); });
 }
 
+// Schlägt nur eine Anfrage fehl (z. B. kurz nach dem Aufwachen des iPhones), meldet der
+// Browser kein "online", wenn das Netz wieder geht. Die nächste geglückte Anfrage hebt den
+// Offline-Zustand deshalb wieder auf.
 navigator.serviceWorker?.addEventListener('message', (e) => {
   if (e.data?.type === 'kochbuch-offline') setOffline(e.data.at);
+  if (e.data?.type === 'kochbuch-online' && navigator.onLine) setOnline();
 });
 window.addEventListener('offline', () => setOffline());
 window.addEventListener('online', setOnline);
@@ -3328,7 +3341,7 @@ async function addPlanToList(entries) {
     toast(`${additions.length} ${additions.length === 1 ? 'Zutat' : 'Zutaten'} auf „${list.name}“`);
     return true;
   } catch (err) {
-    toast(err.message);
+    notSaved(err);
     return false;
   }
 }
@@ -3461,8 +3474,8 @@ async function renderShopping(listId) {
         const patch = { amount: parsed.amountMax ?? parsed.amount, unit: parsed.unit, manual: true };
         Object.assign(item, patch);
         draw();
-        const { error } = await supabase.from('shopping_items').update(patch).eq('id', item.id);
-        if (error) toast(error.message);
+        const { error } = await save(supabase.from('shopping_items').update(patch).eq('id', item.id));
+        if (error) { notSaved(error); reload(); }
       };
     });
     app.querySelectorAll('[data-check]').forEach((box) => {
@@ -3473,9 +3486,9 @@ async function renderShopping(listId) {
         const pending = loadPendingChecks();
         const remember = () => { savePendingChecks({ ...loadPendingChecks(), [item.id]: item.checked }); };
         if (!navigator.onLine) { remember(); return; }
-        const { error } = await supabase.from('shopping_items').update({ checked: item.checked }).eq('id', item.id);
+        const { error } = await save(supabase.from('shopping_items').update({ checked: item.checked }).eq('id', item.id));
         if (error && isNetworkError(error)) { remember(); toast('Offline gemerkt, wird nachgereicht'); return; }
-        if (error) toast(error.message);
+        if (error) { notSaved(error); item.checked = !item.checked; draw(); }
         else if (item.id in pending) { delete pending[item.id]; savePendingChecks(pending); }
         if (!error && item.checked) frequent = await countPurchase(list.id, item, frequent);
       };
@@ -3484,8 +3497,8 @@ async function renderShopping(listId) {
       b.onclick = async () => {
         items = items.filter((i) => i.id !== b.dataset.del);
         draw();
-        const { error } = await supabase.from('shopping_items').delete().eq('id', b.dataset.del);
-        if (error) toast(error.message);
+        const { error } = await save(supabase.from('shopping_items').delete().eq('id', b.dataset.del));
+        if (error) { notSaved(error); reload(); }
       };
     });
     app.querySelectorAll('[data-recipe]').forEach((b) => {
@@ -3494,11 +3507,11 @@ async function renderShopping(listId) {
         if (!confirm(`Alle Zutaten von „${rec.title}“ von der Liste nehmen?`)) return;
         const { updates, deletes } = removeRecipe(items, rec.recipe_id);
         const results = await Promise.all([
-          ...updates.map(({ id, ...patch }) => supabase.from('shopping_items').update(patch).eq('id', id)),
-          deletes.length ? supabase.from('shopping_items').delete().in('id', deletes) : null,
+          ...updates.map(({ id, ...patch }) => save(supabase.from('shopping_items').update(patch).eq('id', id))),
+          deletes.length ? save(supabase.from('shopping_items').delete().in('id', deletes)) : null,
         ].filter(Boolean));
         const failed = results.find((r) => r.error);
-        if (failed) toast(failed.error.message); else toast(`„${rec.title}“ von der Liste genommen`);
+        if (failed) notSaved(failed.error); else toast(`„${rec.title}“ von der Liste genommen`);
         await reload();
       };
     });
@@ -3508,18 +3521,43 @@ async function renderShopping(listId) {
         const ids = done.map((i) => i.id);
         items = items.filter((i) => !i.checked);
         draw();
-        const { error } = await supabase.from('shopping_items').delete().in('id', ids);
-        if (error) toast(error.message);
+        const { error } = await save(supabase.from('shopping_items').delete().in('id', ids));
+        if (error) { notSaved(error); reload(); }
       };
     }
   };
 
+  // Neu laden, ohne eigene Änderungen zu überschreiben. Früher konnte eine Antwort, die vor
+  // dem Speichern abgeschickt wurde, einen gerade hinzugefügten Eintrag oder Haken wieder
+  // verschwinden lassen. Jetzt gilt: Solange etwas gespeichert wird, wartet das Laden, und eine
+  // Antwort, die älter ist als die letzte eigene Änderung, wird verworfen und neu geholt.
+  let edits = 0; // Zähler der eigenen Änderungen
+  let saving = 0; // davon gerade unterwegs
   let reloading = null;
-  const reload = async () => {
-    if (reloading) return reloading;
-    reloading = loadItems(list.id).then((fresh) => { items = fresh; draw(); })
-      .catch(() => {}).finally(() => { reloading = null; });
+  let reloadAgain = false;
+  const reload = () => {
+    if (reloading || saving) { reloadAgain = true; return reloading ?? Promise.resolve(); }
+    const startedAt = edits;
+    reloading = loadItems(list.id).then((fresh) => {
+      if (edits === startedAt && !saving) { items = fresh; draw(); } else reloadAgain = true;
+    }).catch(() => {}).finally(() => {
+      reloading = null;
+      if (reloadAgain && !saving) { reloadAgain = false; reload(); }
+    });
     return reloading;
+  };
+  // Schickt eine Änderung an die Datenbank und liefert deren Antwort ({ data, error }).
+  const save = async (request) => {
+    edits += 1;
+    saving += 1;
+    try {
+      return await request;
+    } catch (error) {
+      return { data: null, error };
+    } finally {
+      saving -= 1;
+      if (!saving && reloadAgain && !reloading) { reloadAgain = false; reload(); }
+    }
   };
 
   $('#item-sort').onchange = (e) => {
@@ -3549,14 +3587,14 @@ async function renderShopping(listId) {
     if (!text) return;
     const parsed = parseIngredientLine(text);
     input.value = '';
-    const { data, error } = await supabase.from('shopping_items').insert({
+    const { data, error } = await save(supabase.from('shopping_items').insert({
       list_id: list.id,
       name: (parsed.name || text).slice(0, 200),
       amount: parsed.amountMax ?? parsed.amount,
       unit: parsed.unit,
       manual: true,
-    }).select().single();
-    if (error) { toast(error.message); input.value = text; return; }
+    }).select().single());
+    if (error) { notSaved(error); if (!input.value) input.value = text; return; }
     if (!items.some((i) => i.id === data.id)) items.push(data);
     rememberCategories([data.name]);
     draw();
@@ -3597,10 +3635,10 @@ async function renderShopping(listId) {
     const f = frequentSuggestions(frequent, items, categoryKey, { limit: Infinity }).find((x) => x.key === chip.dataset.frequent);
     if (!f) return;
     chip.disabled = true;
-    const { data, error } = await supabase.from('shopping_items').insert({
+    const { data, error } = await save(supabase.from('shopping_items').insert({
       list_id: list.id, name: f.name, amount: f.amount ?? null, unit: f.unit ?? '', manual: true,
-    }).select().single();
-    if (error) { toast(error.message); chip.disabled = false; return; }
+    }).select().single());
+    if (error) { notSaved(error); chip.disabled = false; return; }
     if (!items.some((i) => i.id === data.id)) items.push(data);
     draw();
   });
