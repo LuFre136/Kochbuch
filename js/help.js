@@ -168,8 +168,9 @@ export const HELP = [
     title: 'Konto und Passwort',
     lines: [
       'Du meldest dich mit deiner E-Mail-Adresse und deinem Passwort an. Dein Benutzername ist das, was andere von dir sehen.',
-      'Passwort vergessen: Gib auf der Anmeldeseite deine E-Mail-Adresse ein und tippe auf „Passwort vergessen?“. Du bekommst eine Mail mit einem Code. Gib ihn in der App ein, zusammen mit deinem neuen Passwort. Die Mail kann ein paar Minuten brauchen; schau auch im Spam-Ordner nach.',
-      'Der Link in der Mail funktioniert nur im selben Browser, in dem du die Mail angefordert hast. Auf dem iPhone ist die App vom Home-Bildschirm ein anderer Browser als Safari, deshalb ist der Code der sichere Weg.',
+      'Lege unter „Verwalten“ → „Wiederherstellungscode“ einen Code an und schreib ihn auf. Er wird nur einmal angezeigt; ein neuer Code macht den alten ungültig.',
+      'Passwort vergessen: Tippe auf der Anmeldeseite auf „Passwort vergessen?“, gib Benutzernamen oder E-Mail, den Code und ein neues Passwort ein. Danach bist du angemeldet und bekommst gleich einen neuen Code zum Aufschreiben. Auf anderen Geräten wirst du abgemeldet.',
+      'Ohne Code bleibt nur der Weg per Mail („Keinen Code? Per Mail versuchen“). Kommt keine Mail an, hilft dir die Person, die die App betreut.',
       'Angemeldet änderst du dein Passwort unter „Verwalten“ → „Passwort ändern“.',
     ],
   },

@@ -93,6 +93,7 @@ label small, .hint { font-weight: 400; color: var(--muted); font-size: 0.875rem;
 }
 .notice.error { border-color: var(--danger); }
 .hint.error { color: var(--danger); }
+.recovery-code { font: 600 1.35rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .06em; text-align: center; padding: 12px; border-radius: 12px; background: var(--bg); user-select: all; -webkit-user-select: all; }
 .empty { text-align: center; padding: 40px 20px; }
 
 .auth { display: grid; gap: 14px; max-width: 420px; margin: 24px auto; }

@@ -5,11 +5,11 @@
 
 export const NEWS = [
   {
-    version: '2026-10-23-passwort',
-    title: 'Passwort vergessen und ändern',
+    version: '2026-10-23-wiederherstellung',
+    title: 'Passwort vergessen? Wiederherstellungscode',
     lines: [
-      { text: '„Passwort vergessen?“ schickt jetzt eine Mail mit einem Code, den du direkt in der App eingibst. Das klappt auch, wenn du die Mail auf einem anderen Gerät liest.', ziel: '#/hilfe/konto' },
-      { text: 'Unter „Verwalten“ → „Passwort ändern“ legst du ein neues Passwort fest, während du angemeldet bist.', ziel: '#/verwalten' },
+      { text: 'Unter „Verwalten“ → „Wiederherstellungscode“ erstellst du einen Code zum Aufschreiben. Hast du dein Passwort vergessen, setzt du es auf der Anmeldeseite mit „Passwort vergessen?“ und diesem Code selbst neu, ganz ohne Mail.', ziel: '#/verwalten' },
+      { text: 'Unter „Verwalten“ → „Passwort ändern“ legst du ein neues Passwort fest, während du angemeldet bist.', ziel: '#/hilfe/konto' },
     ],
   },
   {
