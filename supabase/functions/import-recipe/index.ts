@@ -582,6 +582,10 @@ export function aiPrompt(meta: VideoMeta | null, source: AiSource): string {
     source === 'images'
       ? '- Schritte: in der Reihenfolge der Vorlage, jeweils ein bis drei kurze Sätze, keine Nummerierung. Unleserliches nicht raten, sondern mit "[unleserlich]" kennzeichnen.'
       : '- Schritte: in der Reihenfolge des Videos, jeweils ein bis drei kurze Sätze, keine Nummerierung.',
+    ...(source === 'video' ? [
+      '- Oft wird die Zubereitung nicht erklärt, sondern nur gezeigt (z. B. ein Koch in der Restaurantküche, Musik statt Sprache). Dann beschreibe die Handgriffe, die zu sehen sind, in der gezeigten Reihenfolge (z. B. "Zwiebeln fein würfeln", "Fleisch scharf anbraten"). Wer Zutaten nennt, nennt auch Schritte; lass die Schritte nur leer, wenn gar nichts zubereitet wird.',
+      '- Auch ein Video, in dem jemand ein Gericht zubereitet, ohne es "Rezept" zu nennen, ist ein Rezept.',
+    ] : []),
     source === 'video'
       ? '- start: Zeitpunkt im Video im Format M:SS, an dem der Schritt beginnt. Wenn unklar, null.'
       : source === 'subtitles'
@@ -594,6 +598,27 @@ export function aiPrompt(meta: VideoMeta | null, source: AiSource): string {
     '- Ist es kein Rezept, setze is_recipe auf false und lass Zutaten und Schritte leer.',
     ...(meta && source === 'paste' ? ['', `Text:\n${meta.description.slice(0, MAX_TEXT)}`]
       : meta ? ['', `Titel: ${meta.title}`, `Beschreibung:\n${meta.description.slice(0, 8000) || '(keine)'}`] : []),
+  ].join('\n');
+}
+
+const STEPS_SCHEMA = {
+  type: 'OBJECT',
+  properties: { steps: AI_SCHEMA.properties.steps },
+  required: ['steps'],
+};
+
+// Zweiter Blick aufs Video, wenn die erste Auswertung Zutaten, aber keine Schritte geliefert hat.
+export function stepsPrompt(title: string, ingredients: string[]): string {
+  return [
+    'Du bekommst ein Kochvideo. Die Zutaten sind schon bekannt, es fehlen die Arbeitsschritte.',
+    `Gericht: ${title || '(unbekannt)'}`,
+    `Zutaten:\n${ingredients.map((i) => `- ${i}`).join('\n')}`,
+    '',
+    'Schau dir das ganze Video an (Bild, Ton und eingeblendete Texte) und schreibe auf, wie das Gericht zubereitet wird.',
+    'Regeln:',
+    '- Alles auf Deutsch, in der Reihenfolge des Videos, jeweils ein bis drei kurze Sätze, keine Nummerierung.',
+    '- Wird nichts erklärt, beschreibe die Handgriffe, die zu sehen sind (z. B. "Nudeln in Salzwasser kochen", "Soße einkochen lassen"). Nichts dazudichten, was nicht zu sehen oder zu hören ist.',
+    '- start: Zeitpunkt im Video im Format M:SS, an dem der Schritt beginnt. Wenn unklar, null.',
   ].join('\n');
 }
 
@@ -776,7 +801,33 @@ async function estimateNutrition(body: unknown) {
   }
 }
 
-async function importVideo(video: VideoRef, url: string) {
+// Die Funktion darf etwa 150 Sekunden laufen; so viel planen die KI-Aufrufe zusammen ein.
+const TIME_BUDGET = 140_000;
+
+// Die bessere von zwei Auswertungen: mit Zutaten und Schritten vor nur Zutaten vor nichts.
+// deno-lint-ignore no-explicit-any
+export function aiScore(ai: any): number {
+  if (!ai?.is_recipe) return 0;
+  return (ai.ingredients.length ? 2 : 0) + (ai.steps.length ? 1 : 0);
+}
+
+// Fehlen nach der Auswertung die Schritte, wird das Video noch einmal nur nach den Schritten gefragt.
+// deno-lint-ignore no-explicit-any
+async function addMissingSteps(key: string, ai: ReturnType<typeof normalizeAiRecipe>, videoPart: any, maxSeconds: number | null, started: number) {
+  if (!ai.is_recipe || !ai.ingredients.length || ai.steps.length) return ai;
+  const timeLeft = TIME_BUDGET - (Date.now() - started);
+  if (timeLeft < 30_000) return ai;
+  try {
+    const raw = await askGemini(key, [videoPart, { text: stepsPrompt(ai.title, ai.ingredients) }], true, timeLeft, STEPS_SCHEMA);
+    const { steps } = normalizeAiRecipe({ steps: raw.steps }, maxSeconds, true);
+    return steps.length ? { ...ai, steps } : ai;
+  } catch {
+    return ai; // dann bleibt es bei den Zutaten, die App sagt, dass Schritte fehlen
+  }
+}
+
+export async function importVideo(video: VideoRef, url: string) {
+  const started = Date.now();
   const source = videoSource(video, url);
   let meta: VideoMeta;
   try {
@@ -829,16 +880,20 @@ async function importVideo(video: VideoRef, url: string) {
     }
     if (meta.description) tries.push({ parts: [{ text: aiPrompt(meta, 'text') }], withTimes: false, from: 'description' });
     for (const t of tries) {
+      const timeLeft = TIME_BUDGET - (Date.now() - started);
+      if (timeLeft < 20_000) break;
       try {
-        ai = normalizeAiRecipe(await askGemini(key, t.parts, t.from !== 'photos'), meta.seconds, t.withTimes);
-        if (ai.is_recipe && ai.ingredients.length) { from = t.from; break; }
-        // Kein Rezept gefunden: den nächsten Weg versuchen, aber das Ergebnis behalten.
-        if (!from) from = t.from;
+        const next = normalizeAiRecipe(await askGemini(key, t.parts, t.from !== 'photos', Math.min(110_000, timeLeft)), meta.seconds, t.withTimes);
+        // Das beste Ergebnis behalten; ein späterer Weg ersetzt es nur, wenn er mehr liefert.
+        if (!ai || aiScore(next) > aiScore(ai)) { ai = next; from = t.from; }
+        if (aiScore(ai) === 3) break;
       } catch (err) {
         aiError = (err as Error).message;
         if ((err as Error).name === 'TimeoutError') break; // kein zweiter Versuch, sonst läuft die Funktion zu lange
       }
     }
+    // Zutaten ohne Schritte: das YouTube-Video noch einmal gezielt nach der Zubereitung fragen.
+    if (ai && video.provider === 'youtube') ai = await addMissingSteps(key, ai, tries[0].parts[0], meta.seconds, started);
   }
 
   const found = ai?.is_recipe && ai.ingredients.length > 0;
@@ -861,6 +916,7 @@ async function importVideo(video: VideoRef, url: string) {
     video,
     ai: !key ? 'none' : ai ? 'ok' : 'failed',
     ...(found && from ? { ai_from: from } : {}),
+    ...(found && !ai!.steps.length ? { steps_missing: true } : {}),
     ...(ai ? {} : aiError ? { ai_error: aiError } : {}),
   };
 }
@@ -912,6 +968,7 @@ function aiResult(ai: ReturnType<typeof normalizeAiRecipe>) {
     notes: found ? ai.notes : '',
     nutrition: found ? ai.nutrition : null,
     structured: found,
+    ...(found && ai.ingredients.length && !ai.steps.length ? { steps_missing: true } : {}),
   };
 }
 
@@ -1033,8 +1090,9 @@ async function importUploadedVideo(req: Request, input: { path?: unknown; source
       { file_data: { mime_type: mimeType, file_uri: geminiFile.uri } },
       { text: aiPrompt(meta, 'video') },
     ];
-    const timeLeft = Math.max(20_000, 140_000 - (Date.now() - started));
-    const ai = normalizeAiRecipe(await askGemini(key, parts, true, timeLeft), meta?.seconds ?? null, true);
+    const timeLeft = Math.max(20_000, TIME_BUDGET - (Date.now() - started));
+    let ai = normalizeAiRecipe(await askGemini(key, parts, true, timeLeft), meta?.seconds ?? null, true);
+    ai = await addMissingSteps(key, ai, parts[0], meta?.seconds ?? null, started);
     const image = meta?.thumbnail ? await fetchImage(meta.thumbnail) : null;
     const result = aiResult(ai);
     return json({

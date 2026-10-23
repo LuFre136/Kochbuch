@@ -280,3 +280,48 @@ test('die Anweisung für Nährwerte verlangt die Menge der Zeile und keine Schä
   assert.match(prompt, /1\. 200 g Mehl/);
   assert.match(prompt, /2\. Salz/);
 });
+
+// ---------- YouTube: Zutaten erkannt, Schritte fehlen ----------
+
+test('fragt bei YouTube-Videos ohne Schritte gezielt nach der Zubereitung', async () => {
+  const { importVideo, aiPrompt, stepsPrompt } = await import('../supabase/functions/import-recipe/index.ts');
+  assert.match(aiPrompt(null, 'video'), /Handgriffe/);
+  assert.match(stepsPrompt('Ragù', ['500 g Rinderhack']), /- 500 g Rinderhack/);
+
+  const gemini = (obj) => Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify(obj) }] } }] });
+  const firstAnswer = { is_recipe: true, title: 'Ragù', ingredients: ['500 g Rinderhack', '1 Zwiebel'], steps: [] };
+  const run = async (stepsAnswer) => {
+    const prompts = [];
+    const realFetch = globalThis.fetch;
+    const realDeno = globalThis.Deno;
+    globalThis.Deno = { env: { get: (n) => ({ GEMINI_API_KEY: 'KEY' })[n] } };
+    globalThis.fetch = async (url, init = {}) => {
+      url = String(url);
+      if (url.includes('youtube.com/oembed')) return Response.json({ title: 'Best ragu ever?', thumbnail_url: null });
+      if (url.includes(':generateContent')) {
+        const body = JSON.parse(init.body);
+        const text = body.contents[0].parts.at(-1).text;
+        prompts.push(text);
+        return gemini(text.startsWith('Du bekommst ein Kochvideo. Die Zutaten') ? stepsAnswer : firstAnswer);
+      }
+      return new Response('nope', { status: 500 });
+    };
+    try {
+      return { result: await importVideo({ provider: 'youtube', id: 'hz-2Vg36yGU' }, 'https://www.youtube.com/shorts/hz-2Vg36yGU'), prompts };
+    } finally {
+      globalThis.fetch = realFetch;
+      globalThis.Deno = realDeno;
+    }
+  };
+
+  const ok = await run({ steps: [{ text: 'Zwiebel würfeln', start: '0:05' }, { text: 'Hack anbraten', start: null }] });
+  assert.equal(ok.prompts.length, 2);
+  assert.deepEqual(ok.result.ingredients, ['500 g Rinderhack', '1 Zwiebel']);
+  assert.deepEqual(ok.result.steps, [{ text: 'Zwiebel würfeln', t: 5 }, 'Hack anbraten']);
+  assert.equal(ok.result.steps_missing, undefined);
+
+  const still = await run({ steps: [] });
+  assert.deepEqual(still.result.ingredients, ['500 g Rinderhack', '1 Zwiebel']);
+  assert.deepEqual(still.result.steps, []);
+  assert.equal(still.result.steps_missing, true);
+});

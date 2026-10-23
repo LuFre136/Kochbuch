@@ -4575,6 +4575,10 @@ async function renderCookbookRecipe(ownerId, recipeId, altId = null) {
 }
 
 function importMessage(data) {
+  // Zutaten erkannt, Schritte nicht: das sagen, statt still eine leere Zubereitung zu zeigen.
+  if (data.steps_missing) {
+    return 'Die Zutaten sind übernommen, aber die Zubereitungsschritte konnte die KI nicht erkennen (oft, wenn im Video nur gekocht und nichts erklärt wird). Bitte die Schritte selbst ergänzen oder den Import später noch einmal versuchen.';
+  }
   if (data.photos) {
     return data.ingredients?.length || data.steps?.length
       ? 'Vom Foto übernommen. Die KI kann sich verlesen, besonders bei Handschrift: Prüfe alles, dann tippe auf Speichern.'
