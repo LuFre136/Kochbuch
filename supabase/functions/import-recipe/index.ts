@@ -801,6 +801,14 @@ async function estimateNutrition(body: unknown) {
   }
 }
 
+// Zusatz für den zweiten Blick aufs Video, wenn der erste kein Rezept ergeben hat.
+export const SECOND_LOOK = [
+  'Wichtig: Ein erster Durchgang hat in diesem Video kein Rezept gefunden. Schau genauer hin.',
+  'Wird im Video etwas gekocht oder angerichtet, ist es ein Rezept (is_recipe = true), auch wenn nichts erklärt wird.',
+  'Nenne dann alle Zutaten, die zu sehen oder zu hören sind (ohne Menge, wenn keine genannt wird), und die Handgriffe als Schritte.',
+  'Werden mehrere Gerichte gezeigt, nimm das Hauptgericht (meist das aus dem Titel).',
+].join('\n');
+
 // Die Funktion darf etwa 150 Sekunden laufen; so viel planen die KI-Aufrufe zusammen ein.
 const TIME_BUDGET = 140_000;
 
@@ -843,7 +851,7 @@ export async function importVideo(video: VideoRef, url: string) {
   if (key) {
     // Mehrere Wege, der beste zuerst; der nächste kommt nur, wenn der vorige scheitert.
     // deno-lint-ignore no-explicit-any
-    const tries: { parts: any[]; withTimes: boolean; from: string }[] = [];
+    const tries: { parts: any[]; withTimes: boolean; from: string; fullRes?: boolean }[] = [];
     if (video.provider === 'youtube') {
       tries.push({
         parts: [{ file_data: { file_uri: `https://www.youtube.com/watch?v=${video.id}` } }, { text: aiPrompt(meta, 'video') }],
@@ -879,11 +887,21 @@ export async function importVideo(video: VideoRef, url: string) {
       }
     }
     if (meta.description) tries.push({ parts: [{ text: aiPrompt(meta, 'text') }], withTimes: false, from: 'description' });
+    if (video.provider === 'youtube') {
+      // Letzter Weg: das Video noch einmal in voller Auflösung und mit der Vorgabe, aufzuschreiben,
+      // was gekocht wird. Hilft bei Videos, die nichts erklären (Restaurantküche, nur Musik).
+      tries.push({
+        parts: [{ file_data: { file_uri: `https://www.youtube.com/watch?v=${video.id}` } }, { text: `${aiPrompt(meta, 'video')}\n\n${SECOND_LOOK}` }],
+        withTimes: true,
+        from: 'video',
+        fullRes: true,
+      });
+    }
     for (const t of tries) {
       const timeLeft = TIME_BUDGET - (Date.now() - started);
       if (timeLeft < 20_000) break;
       try {
-        const next = normalizeAiRecipe(await askGemini(key, t.parts, t.from !== 'photos', Math.min(110_000, timeLeft)), meta.seconds, t.withTimes);
+        const next = normalizeAiRecipe(await askGemini(key, t.parts, t.from !== 'photos' && !t.fullRes, Math.min(110_000, timeLeft)), meta.seconds, t.withTimes);
         // Das beste Ergebnis behalten; ein späterer Weg ersetzt es nur, wenn er mehr liefert.
         if (!ai || aiScore(next) > aiScore(ai)) { ai = next; from = t.from; }
         if (aiScore(ai) === 3) break;
@@ -917,7 +935,8 @@ export async function importVideo(video: VideoRef, url: string) {
     ai: !key ? 'none' : ai ? 'ok' : 'failed',
     ...(found && from ? { ai_from: from } : {}),
     ...(found && !ai!.steps.length ? { steps_missing: true } : {}),
-    ...(ai ? {} : aiError ? { ai_error: aiError } : {}),
+    // Fehler nicht verschlucken, wenn am Ende kein Rezept herauskam (z. B. Video gescheitert, Beschreibung leer).
+    ...(!found && aiError ? { ai_error: aiError } : {}),
   };
 }
 
