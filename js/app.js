@@ -1106,11 +1106,115 @@ function renderLogin(hint = '') {
       form.querySelectorAll('button').forEach((b) => { b.disabled = false; });
     }
   };
-  $('#forgot').onclick = () => {
-    const email = form.email.value.trim();
-    if (!email || !form.email.checkValidity()) { msg.textContent = 'Gib zuerst deine E-Mail-Adresse ein.'; form.email.focus(); return; }
+  $('#forgot').onclick = () => renderRecover(form.email.value.trim());
+}
+
+// Passwort vergessen: mit dem Wiederherstellungscode, den man sich vorher aufgeschrieben hat.
+// Geht ohne Mail. Wer keinen Code hat, kann es noch per Mail versuchen.
+function renderRecover(login = '') {
+  nav.innerHTML = '';
+  tabbar.hidden = true;
+  app.innerHTML = `
+    <form class="auth card-panel" id="recover">
+      <h1>Passwort vergessen</h1>
+      <p class="hint">Gib deinen Wiederherstellungscode ein. Du hast ihn beim Anlegen aufgeschrieben (unter „Verwalten“ → „Wiederherstellungscode“).</p>
+      <label>Benutzername oder E-Mail <input name="login" value="${esc(login)}" autocomplete="username" autocapitalize="off" required></label>
+      <label>Wiederherstellungscode <input name="code" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false" required></label>
+      <label>Neues Passwort <input type="password" name="password" autocomplete="new-password" minlength="6" required></label>
+      <button class="btn primary">Passwort speichern</button>
+      <div class="row">
+        <button type="button" class="link" id="by-mail">Keinen Code? Per Mail versuchen</button>
+        <button type="button" class="link" id="back-login">Zurück zur Anmeldung</button>
+      </div>
+      <p class="hint" id="msg"></p>
+    </form>`;
+  const form = $('#recover');
+  const msg = $('#msg');
+  $('#back-login').onclick = () => renderLogin();
+  $('#by-mail').onclick = () => {
+    const email = form.login.value.trim();
+    if (!email.includes('@')) { msg.textContent = 'Für die Mail brauchen wir deine E-Mail-Adresse statt des Benutzernamens.'; form.login.focus(); return; }
     renderResetCode(email);
   };
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    msg.textContent = '';
+    form.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+    try {
+      const password = form.password.value;
+      const { data, error } = await supabase.rpc('reset_password_with_code', {
+        p_login: form.login.value.trim(), p_code: form.code.value, p_password: password,
+      });
+      if (error) {
+        throw new Error(/reset_password_with_code|schema cache/i.test(error.message)
+          ? 'Das Zurücksetzen mit Code ist noch nicht eingerichtet. Versuche es per Mail.' : error.message);
+      }
+      if (!data) throw new Error('Name oder Code stimmt nicht.');
+      const signIn = await supabase.auth.signInWithPassword({ email: data.email, password });
+      if (signIn.error) throw new Error(`Das Passwort ist geändert. Anmelden ging aber nicht: ${signIn.error.message}`);
+      toast('Passwort geändert');
+      // Der alte Code ist verbraucht; den neuen gleich zeigen.
+      await showRecoveryCode(data.code, 'Dein alter Code gilt nicht mehr. Hier ist dein neuer:');
+    } catch (err) {
+      msg.textContent = err.message;
+    } finally {
+      form.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+    }
+  };
+}
+
+// Zeigt einen frisch erstellten Wiederherstellungscode. Gespeichert ist nur ein Hash,
+// später lässt er sich also nicht mehr anzeigen.
+async function showRecoveryCode(code, intro = '') {
+  await openSheet(`<h2>Dein Wiederherstellungscode</h2>
+    ${intro ? `<p>${esc(intro)}</p>` : ''}
+    <p class="recovery-code" id="recovery-code">${esc(code)}</p>
+    <p class="hint">Schreib ihn auf oder speichere ihn in deinen Notizen oder im Passwort-Manager. Mit ihm setzt du dein Passwort neu, wenn du es vergessen hast. Er wird nur jetzt angezeigt.</p>
+    <div class="row"><button type="button" class="btn" id="copy-code">Kopieren</button><button class="btn primary" value="ok">Habe ich aufgeschrieben</button></div>`, (form) => {
+    form.querySelector('#copy-code').onclick = async () => {
+      try { await navigator.clipboard.writeText(code); toast('Code kopiert'); } catch { toast('Kopieren ging nicht. Bitte abschreiben.'); }
+    };
+  });
+}
+
+async function createRecoveryCode() {
+  const { data, error } = await supabase.rpc('create_recovery_code');
+  if (error) {
+    toast(/create_recovery_code|schema cache/i.test(error.message) ? 'Dafür muss erst wiederherstellung.sql ausgeführt sein.' : error.message);
+    return false;
+  }
+  await showRecoveryCode(data);
+  return true;
+}
+
+// Verwalten → Wiederherstellungscode
+async function manageRecoveryCode() {
+  const { data, error } = await supabase.rpc('my_recovery_code');
+  if (error) { toast('Dafür muss erst wiederherstellung.sql ausgeführt sein.'); return; }
+  const since = data ? new Date(data).toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
+  const { value } = await openSheet(`<h2>Wiederherstellungscode</h2>
+    <p>${data ? `Du hast einen Code vom ${esc(since)}.` : 'Du hast noch keinen Code.'} Mit ihm setzt du dein Passwort neu, wenn du es vergessen hast, ganz ohne Mail.</p>
+    ${data ? '<p class="hint">Ein neuer Code macht den alten ungültig. Anzeigen lässt sich der alte nicht mehr.</p>' : ''}
+    <div class="row"><button class="btn primary" value="new">${data ? 'Neuen Code erstellen' : 'Code erstellen'}</button><button class="btn ghost" value="cancel">Schließen</button></div>`);
+  if (value === 'new') createRecoveryCode();
+}
+
+// Wer noch keinen Code hat, wird höchstens einmal pro Woche gefragt.
+let recoveryAsked = false;
+async function askForRecoveryCode() {
+  if (recoveryAsked || !session || !myName || document.querySelector('dialog[open]')) return;
+  recoveryAsked = true;
+  try {
+    const last = Number(localStorage.getItem('kochbuch.recoveryAsked') || 0);
+    if (Date.now() - last < 7 * 24 * 3600 * 1000) return;
+  } catch { return; }
+  const { data, error } = await supabase.rpc('my_recovery_code');
+  if (error || data) return; // noch nicht eingerichtet oder schon erledigt
+  try { localStorage.setItem('kochbuch.recoveryAsked', String(Date.now())); } catch { /* privater Modus */ }
+  const { value } = await openSheet(`<h2>Passwort vergessen? Kein Problem</h2>
+    <p>Lege einen Wiederherstellungscode an und schreib ihn auf. Damit setzt du dein Passwort jederzeit selbst neu, auch ohne Mail.</p>
+    <div class="row"><button class="btn primary" value="ok">Code erstellen</button><button class="btn ghost" value="later">Später</button></div>`);
+  if (value === 'ok') createRecoveryCode();
 }
 
 // Passwort vergessen: Die Mail enthält einen Code (und einen Link). Der Code wird hier in der
@@ -4050,6 +4154,10 @@ function renderManage() {
         <strong>Was ist neu</strong>
         <small>Die Änderungen der letzten Fassungen noch einmal ansehen</small>
       </button>
+      <button type="button" class="manage-item card-panel" id="recovery">
+        <strong>Wiederherstellungscode</strong>
+        <small>Damit setzt du dein Passwort neu, wenn du es vergessen hast</small>
+      </button>
       <button type="button" class="manage-item card-panel" id="change-password">
         <strong>Passwort ändern</strong>
         <small>Ein neues Passwort für dein Konto festlegen</small>
@@ -4061,6 +4169,7 @@ function renderManage() {
     </nav>`;
   $('#news-again').onclick = () => openNewsSheet(NEWS.slice(0, 2));
   $('#change-password').onclick = () => changePassword();
+  $('#recovery').onclick = () => manageRecoveryCode();
   $('#logout').onclick = async () => {
     await supabase.auth.signOut();
     // Die zwischengespeicherten Daten gehören zu diesem Konto.
@@ -4333,6 +4442,7 @@ function showNewsIfUpdated() {
   const neu = newsSince(seen);
   try { localStorage.setItem(NEWS_KEY, latestVersion()); } catch { /* privater Modus */ }
   if (neu.length) openNewsSheet(neu);
+  return neu.length > 0;
 }
 
 async function openNewsSheet(entries) {
@@ -4810,6 +4920,8 @@ if (isConfigured) {
     if (userChanged) { recipes = null; myName = undefined; categories = null; places = null; notes = null; notesFor = null; cookbookCache.clear(); }
     // Nur bei echten Wechseln neu zeichnen, nicht beim stillen Token-Refresh.
     if (userChanged || event === 'PASSWORD_RECOVERY' || event === 'SIGNED_OUT') setTimeout(render);
+    // Nach dem Anmelden oder Registrieren an den Wiederherstellungscode erinnern.
+    if (event === 'SIGNED_IN' && userChanged) setTimeout(askForRecoveryCode, 1500);
   });
   // Rückkehr aus einer Mail (Bestätigung oder Passwort): ?code=… oder ein Fehler in der Adresse.
   const back = new URLSearchParams(location.search + '&' + location.hash.replace(/^#\/?/, ''));
@@ -4839,7 +4951,7 @@ function storedSession() {
 }
 render();
 
-if (isConfigured && session) showNewsIfUpdated();
+if (isConfigured && session && !showNewsIfUpdated()) setTimeout(askForRecoveryCode, 1500);
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
