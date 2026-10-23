@@ -4608,7 +4608,7 @@ function importMessage(data) {
   if (data.ai === 'none') return 'Video übernommen. Für Zutaten und Schritte fehlt in Supabase noch das Secret GEMINI_API_KEY (siehe README).';
   if (data.ai === 'failed') return `Video übernommen, aber die Auswertung hat nicht geklappt${data.ai_error ? ` (${data.ai_error})` : ''}. Die Videobeschreibung steht in den Notizen.`;
   if (data.video.provider === 'tiktok') return 'In Untertiteln, Bildern und Text zum TikTok steht kein Rezept. Tippe in TikTok auf „Teilen“ → „Video speichern“ und lade das Video hier mit „🎬 Aus Video“ hoch. Titel, Bild und Link sind schon übernommen.';
-  return 'Im Video wurde kein Rezept gefunden. Titel, Bild und Link sind übernommen, den Rest bitte selbst ergänzen.';
+  return `Im Video wurde kein Rezept gefunden${data.ai_error ? ` (${data.ai_error})` : ''}. Titel, Bild und Link sind übernommen, den Rest bitte selbst ergänzen.`;
 }
 
 // Fehlermeldung der Edge Function: der Text steht im Body, nicht in error.message.

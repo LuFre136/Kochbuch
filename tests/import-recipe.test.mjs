@@ -315,7 +315,7 @@ test('fragt bei YouTube-Videos ohne Schritte gezielt nach der Zubereitung', asyn
   };
 
   const ok = await run({ steps: [{ text: 'Zwiebel würfeln', start: '0:05' }, { text: 'Hack anbraten', start: null }] });
-  assert.equal(ok.prompts.length, 2);
+  assert.equal(ok.prompts.length, 3); // Video, zweiter Blick (voll aufgelöst), nur Schritte
   assert.deepEqual(ok.result.ingredients, ['500 g Rinderhack', '1 Zwiebel']);
   assert.deepEqual(ok.result.steps, [{ text: 'Zwiebel würfeln', t: 5 }, 'Hack anbraten']);
   assert.equal(ok.result.steps_missing, undefined);
@@ -324,4 +324,51 @@ test('fragt bei YouTube-Videos ohne Schritte gezielt nach der Zubereitung', asyn
   assert.deepEqual(still.result.ingredients, ['500 g Rinderhack', '1 Zwiebel']);
   assert.deepEqual(still.result.steps, []);
   assert.equal(still.result.steps_missing, true);
+});
+
+test('schaut bei YouTube-Videos ohne erkanntes Rezept ein zweites Mal genauer hin', async () => {
+  const { importVideo, SECOND_LOOK } = await import('../supabase/functions/import-recipe/index.ts');
+  const gemini = (obj) => Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify(obj) }] } }] });
+  const run = async (answer) => {
+    const calls = [];
+    const realFetch = globalThis.fetch;
+    const realDeno = globalThis.Deno;
+    globalThis.Deno = { env: { get: (n) => ({ GEMINI_API_KEY: 'KEY', YOUTUBE_API_KEY: 'YT' })[n] } };
+    globalThis.fetch = async (url, init = {}) => {
+      url = String(url);
+      if (url.includes('googleapis.com/youtube')) {
+        return Response.json({ items: [{ snippet: { title: 'Best ragu ever?', description: 'Watch the full episode! #pasta' }, contentDetails: { duration: 'PT58S' } }] });
+      }
+      if (url.includes(':generateContent')) {
+        const body = JSON.parse(init.body);
+        calls.push(body);
+        return answer(body.contents[0].parts.at(-1).text, body);
+      }
+      return new Response('nope', { status: 500 });
+    };
+    try {
+      return { result: await importVideo({ provider: 'youtube', id: 'hz-2Vg36yGU' }, 'https://www.youtube.com/shorts/hz-2Vg36yGU'), calls };
+    } finally {
+      globalThis.fetch = realFetch;
+      globalThis.Deno = realDeno;
+    }
+  };
+  const none = { is_recipe: false, title: '', ingredients: [], steps: [] };
+
+  // Erster Blick und Beschreibung: kein Rezept; der zweite Blick in voller Auflösung findet es.
+  const found = await run((text) => gemini(text.includes(SECOND_LOOK)
+    ? { is_recipe: true, title: 'Ragù', ingredients: ['Kalbsbries', 'Tagliolini'], steps: [{ text: 'Bries anbraten', start: '0:10' }] }
+    : none));
+  assert.equal(found.calls.length, 3);
+  assert.equal(found.calls[0].generationConfig.mediaResolution, 'MEDIA_RESOLUTION_LOW');
+  assert.equal(found.calls[2].generationConfig.mediaResolution, undefined);
+  assert.deepEqual(found.result.ingredients, ['Kalbsbries', 'Tagliolini']);
+  assert.deepEqual(found.result.steps, [{ text: 'Bries anbraten', t: 10 }]);
+
+  // Scheitert das Video, darf der Fehler nicht hinter "kein Rezept" aus der Beschreibung verschwinden.
+  const broken = await run((text, body) => (body.contents[0].parts[0].file_data
+    ? Response.json({ error: { message: 'Video nicht verfügbar' } }, { status: 400 })
+    : gemini(none)));
+  assert.deepEqual(broken.result.ingredients, []);
+  assert.match(broken.result.ai_error, /Video nicht verfügbar/);
 });
