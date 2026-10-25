@@ -5,6 +5,13 @@
 
 export const NEWS = [
   {
+    version: '2026-10-25-kochen-plan',
+    title: 'Kochen landet im Plan',
+    lines: [
+      { text: 'Startest du den Kochmodus, steht das Rezept automatisch für heute im Plan, falls es dort noch fehlt.', ziel: '#/plan' },
+    ],
+  },
+  {
     version: '2026-10-23-passwort',
     title: 'Passwort vergessen und ändern',
     lines: [

@@ -23,6 +23,7 @@ export const HELP = [
     routes: ['timer'],
     lines: [
       '„Kochen“ im Rezept öffnet den Kochmodus: zuerst die Zutaten, dann jeder Schritt groß auf einer eigenen Seite. Wische oder tippe auf „Weiter“ und „Zurück“.',
+      'Beim Start des Kochmodus kommt ein eigenes Rezept für heute in den Plan, falls es dort noch fehlt. Was schon für heute geplant ist, bleibt stehen.',
       'Solange der Kochmodus offen ist, bleibt das Display an. Hat ein Schritt einen Zeitstempel, öffnet „Video ab …“ das Video unten auf der Seite.',
       'Auf der letzten Seite speichert „Fertig, heute gekocht“ das Datum als „zuletzt gekocht“. Öffnest du den Kochmodus wieder, geht es beim Schritt nach deinem letzten Haken weiter.',
       'Tippe im Rezept auf eine Zutat oder einen Schritt, um sie durchzustreichen. Ein zweiter Tipp nimmt den Haken zurück.',
