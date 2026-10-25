@@ -810,7 +810,7 @@ export const SECOND_LOOK = [
 ].join('\n');
 
 // Die Funktion darf etwa 150 Sekunden laufen; so viel planen die KI-Aufrufe zusammen ein.
-const TIME_BUDGET = 140_000;
+const TIME_BUDGET = 130_000;
 
 // Die bessere von zwei Auswertungen: mit Zutaten und Schritten vor nur Zutaten vor nichts.
 // deno-lint-ignore no-explicit-any
@@ -834,6 +834,33 @@ async function addMissingSteps(key: string, ai: ReturnType<typeof normalizeAiRec
   }
 }
 
+// Steht in der Beschreibung ein Rezept? Dann wird sie gleich parallel zum Video ausgewertet.
+export function looksLikeRecipe(text: string): boolean {
+  return /\b(zutaten|ingredients|zubereitung)\b/i.test(text)
+    || (text.match(/\d\s*(g|kg|ml|l|el|tl|esslöffel|teelöffel|tbsp|tsp|cups?)\b/gi) ?? []).length >= 3;
+}
+
+const BULLET = /^\s*(?:[-–•*·▪︎▫️✅✔️👉🔸🔹]|\d+[.)])\s*/u;
+
+// Ohne KI: Zutaten (und Schritte) aus einer Beschreibung mit Überschrift "Zutaten:" / "Zubereitung:".
+// Rückfall, wenn Gemini nicht antwortet (Zeitlimit, Kontingent aufgebraucht).
+export function recipeFromText(text: string): { ingredients: string[]; steps: string[] } {
+  const out = { ingredients: [] as string[], steps: [] as string[] };
+  let section: 'ingredients' | 'steps' | null = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    const head = line.replace(/[:：]\s*$/, '').replace(/^[^\p{L}]+/u, '').toLowerCase();
+    if (/^(zutaten|ingredients)\b/.test(head) && line.length < 60) { section = 'ingredients'; continue; }
+    if (/^(zubereitung|anleitung|so geht'?s|instructions|method|directions)\b/.test(head) && line.length < 60) { section = 'steps'; continue; }
+    if (!section) continue;
+    if (!line) { if (out[section].length) section = null; continue; }
+    if (line.startsWith('#') || /^https?:\/\//.test(line)) { section = null; continue; }
+    const item = cleanText(line.replace(BULLET, ''));
+    if (item) out[section].push(item);
+  }
+  return out;
+}
+
 export async function importVideo(video: VideoRef, url: string) {
   const started = Date.now();
   const source = videoSource(video, url);
@@ -851,7 +878,7 @@ export async function importVideo(video: VideoRef, url: string) {
   if (key) {
     // Mehrere Wege, der beste zuerst; der nächste kommt nur, wenn der vorige scheitert.
     // deno-lint-ignore no-explicit-any
-    const tries: { parts: any[]; withTimes: boolean; from: string; fullRes?: boolean }[] = [];
+    const tries: { parts: any[]; withTimes: boolean; from: string; fullRes?: boolean; pending?: Promise<Record<string, unknown>> }[] = [];
     if (video.provider === 'youtube') {
       tries.push({
         parts: [{ file_data: { file_uri: `https://www.youtube.com/watch?v=${video.id}` } }, { text: aiPrompt(meta, 'video') }],
@@ -886,7 +913,14 @@ export async function importVideo(video: VideoRef, url: string) {
         }
       }
     }
-    if (meta.description) tries.push({ parts: [{ text: aiPrompt(meta, 'text') }], withTimes: false, from: 'description' });
+    if (meta.description) {
+      const parts = [{ text: aiPrompt(meta, 'text') }];
+      // Mit Rezept in der Beschreibung läuft diese schnelle Auswertung gleich neben dem Video,
+      // damit sie nicht wegfällt, wenn das Video zu lange braucht.
+      const pending = looksLikeRecipe(meta.description) ? askGemini(key, parts, true, 60_000) : undefined;
+      pending?.catch(() => {}); // Fehler kommen im Durchlauf unten an
+      tries.push({ parts, withTimes: false, from: 'description', pending });
+    }
     if (video.provider === 'youtube') {
       // Letzter Weg: das Video noch einmal in voller Auflösung und mit der Vorgabe, aufzuschreiben,
       // was gekocht wird. Hilft bei Videos, die nichts erklären (Restaurantküche, nur Musik).
@@ -897,21 +931,41 @@ export async function importVideo(video: VideoRef, url: string) {
         fullRes: true,
       });
     }
+    let stepsElsewhere: ReturnType<typeof normalizeAiRecipe>['steps'] = [];
     for (const t of tries) {
       const timeLeft = TIME_BUDGET - (Date.now() - started);
-      if (timeLeft < 20_000) break;
+      // Ein Video darf höchstens 90 s brauchen, damit danach noch Zeit für die anderen Wege bleibt.
+      if (!t.pending && timeLeft < (t.fullRes ? 45_000 : 20_000)) continue;
       try {
-        const next = normalizeAiRecipe(await askGemini(key, t.parts, t.from !== 'photos' && !t.fullRes, Math.min(110_000, timeLeft)), meta.seconds, t.withTimes);
+        const next = normalizeAiRecipe(
+          await (t.pending ?? askGemini(key, t.parts, t.from !== 'photos' && !t.fullRes, Math.min(90_000, timeLeft))),
+          meta.seconds, t.withTimes,
+        );
+        if (next.is_recipe && next.steps.length && !stepsElsewhere.length) stepsElsewhere = next.steps;
         // Das beste Ergebnis behalten; ein späterer Weg ersetzt es nur, wenn er mehr liefert.
         if (!ai || aiScore(next) > aiScore(ai)) { ai = next; from = t.from; }
+        // Zutaten aus der Beschreibung, Schritte aus dem Video: zusammenlegen.
+        if (ai.is_recipe && ai.ingredients.length && !ai.steps.length && stepsElsewhere.length) ai = { ...ai, steps: stepsElsewhere };
         if (aiScore(ai) === 3) break;
       } catch (err) {
         aiError = (err as Error).message;
-        if ((err as Error).name === 'TimeoutError') break; // kein zweiter Versuch, sonst läuft die Funktion zu lange
       }
     }
     // Zutaten ohne Schritte: das YouTube-Video noch einmal gezielt nach der Zubereitung fragen.
     if (ai && video.provider === 'youtube') ai = await addMissingSteps(key, ai, tries[0].parts[0], meta.seconds, started);
+  }
+
+  // Kein Rezept von der KI: wenigstens eine Zutatenliste aus der Beschreibung übernehmen.
+  if (!(ai?.is_recipe && ai.ingredients.length)) {
+    const plain = recipeFromText(meta.description);
+    if (plain.ingredients.length) {
+      ai = {
+        is_recipe: true, title: meta.title.replace(/#\S+/g, '').trim(), description: '', tags: [], servings: null,
+        total_minutes: null, cook_minutes: null, ingredients: plain.ingredients, steps: plain.steps,
+        notes: '', nutrition: null,
+      };
+      from = 'description';
+    }
   }
 
   const found = ai?.is_recipe && ai.ingredients.length > 0;
@@ -935,8 +989,8 @@ export async function importVideo(video: VideoRef, url: string) {
     ai: !key ? 'none' : ai ? 'ok' : 'failed',
     ...(found && from ? { ai_from: from } : {}),
     ...(found && !ai!.steps.length ? { steps_missing: true } : {}),
-    // Fehler nicht verschlucken, wenn am Ende kein Rezept herauskam (z. B. Video gescheitert, Beschreibung leer).
-    ...(!found && aiError ? { ai_error: aiError } : {}),
+    // Fehler nicht verschlucken: auch wenn die Zutaten noch aus der Beschreibung kamen, soll man sehen, was schiefging.
+    ...(aiError && (!found || !ai!.steps.length) ? { ai_error: aiError } : {}),
   };
 }
 
