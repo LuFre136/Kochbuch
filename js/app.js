@@ -3151,6 +3151,23 @@ function setupPlanning(r, currentServings) {
   drawPlanned();
 
   $('#plan-btn').onclick = async () => { if (await planRecipe(r, currentServings())) drawPlanned(); };
+  // Wer den Kochmodus startet, kocht heute: das Rezept kommt für heute in den Plan.
+  $('#cook-btn')?.addEventListener('click', async () => {
+    if (await planToday(r, currentServings())) { toast('Für heute eingeplant'); drawPlanned(); }
+  });
+}
+
+// Trägt das Rezept für heute in den Plan ein, falls es dort noch nicht steht; andere
+// Einträge für heute bleiben. Fehler (etwa offline) bleiben still, das Kochen geht vor.
+// Liefert true, wenn ein Eintrag dazugekommen ist.
+async function planToday(r, servings) {
+  const { data, error } = await supabase.from('meal_plan').select('id')
+    .eq('owner_id', session.user.id).eq('recipe_id', r.id).eq('planned_for', today()).limit(1);
+  if (error || data?.length) return false;
+  const { error: insertError } = await supabase.from('meal_plan').insert({
+    recipe_id: r.id, planned_for: today(), servings: Math.max(1, Math.min(100, servings || r.servings)),
+  });
+  return !insertError;
 }
 
 // Dialog zum Einplanen; setzt die Zutaten auf Wunsch gleich auf die Einkaufsliste.
