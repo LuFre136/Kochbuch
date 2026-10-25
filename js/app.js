@@ -4577,7 +4577,7 @@ async function renderCookbookRecipe(ownerId, recipeId, altId = null) {
 function importMessage(data) {
   // Zutaten erkannt, Schritte nicht: das sagen, statt still eine leere Zubereitung zu zeigen.
   if (data.steps_missing) {
-    return 'Die Zutaten sind übernommen, aber die Zubereitungsschritte konnte die KI nicht erkennen (oft, wenn im Video nur gekocht und nichts erklärt wird). Bitte die Schritte selbst ergänzen oder den Import später noch einmal versuchen.';
+    return `Die Zutaten sind übernommen, aber die Zubereitungsschritte konnte die KI nicht erkennen${data.ai_error ? ` (${data.ai_error})` : ' (oft, wenn im Video nur gekocht und nichts erklärt wird)'}. Bitte die Schritte selbst ergänzen oder den Import später noch einmal versuchen.`;
   }
   if (data.photos) {
     return data.ingredients?.length || data.steps?.length

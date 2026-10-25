@@ -372,3 +372,75 @@ test('schaut bei YouTube-Videos ohne erkanntes Rezept ein zweites Mal genauer hi
   assert.deepEqual(broken.result.ingredients, []);
   assert.match(broken.result.ai_error, /Video nicht verfügbar/);
 });
+
+// ---------- Rezept in der Beschreibung (Malfatti-Short) ----------
+
+const MALFATTI = `Malfatti, auf deutsch so viel wie „die Misslungenen". Es ist quasi eine Ricotta Spinat Füllung für Ravioli nur ohne den Nudelteig herum.
+
+Zutaten:
+- 250g Spinat
+- 250g Ricotta
+- 50-80g Semola (je nach dicke)
+- Prise Muskatnuss
+- Salz und Pfeffer
+- 2 EL Olivenöl
+- 1 Zitrone für die Zeste
+- 80g Pecorino
+- handvoll Haselnüsse
+- 40g Butter
+- 5-6 Salbeiblätter
+
+#brunopecorino #malfatti #italy`;
+
+test('liest Zutaten ohne KI aus einer Beschreibung', async () => {
+  const { recipeFromText, looksLikeRecipe } = await import('../supabase/functions/import-recipe/index.ts');
+  assert.ok(looksLikeRecipe(MALFATTI));
+  assert.ok(!looksLikeRecipe('Watch the full episode! #pasta'));
+  const r = recipeFromText(MALFATTI);
+  assert.equal(r.ingredients.length, 11);
+  assert.equal(r.ingredients[0], '250g Spinat');
+  assert.equal(r.ingredients.at(-1), '5-6 Salbeiblätter');
+  assert.deepEqual(r.steps, []);
+  const both = recipeFromText('🍝 ZUTATEN:\n• 200 g Mehl\n• 2 Eier\n\nZubereitung:\n1. Mehl und Eier verkneten.\n2. Ruhen lassen.');
+  assert.deepEqual(both, { ingredients: ['200 g Mehl', '2 Eier'], steps: ['Mehl und Eier verkneten.', 'Ruhen lassen.'] });
+});
+
+test('Malfatti-Short: Zutaten aus der Beschreibung, auch wenn das Video hängt oder Gemini streikt', async () => {
+  const { importVideo } = await import('../supabase/functions/import-recipe/index.ts');
+  const gemini = (obj) => Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify(obj) }] } }] });
+  const run = async (answer) => {
+    const realFetch = globalThis.fetch;
+    const realDeno = globalThis.Deno;
+    globalThis.Deno = { env: { get: (n) => ({ GEMINI_API_KEY: 'KEY', YOUTUBE_API_KEY: 'YT' })[n] } };
+    globalThis.fetch = async (url, init = {}) => {
+      url = String(url);
+      if (url.includes('googleapis.com/youtube')) {
+        return Response.json({ items: [{ snippet: { title: 'Malfatti #malfatti', description: MALFATTI }, contentDetails: { duration: 'PT59S' } }] });
+      }
+      if (url.includes(':generateContent')) return answer(JSON.parse(init.body));
+      return new Response('nope', { status: 500 });
+    };
+    try {
+      return await importVideo({ provider: 'youtube', id: 'H0mONH3fIF4' }, 'https://youtube.com/shorts/H0mONH3fIF4?is=x');
+    } finally {
+      globalThis.fetch = realFetch;
+      globalThis.Deno = realDeno;
+    }
+  };
+  const isVideo = (body) => Boolean(body.contents[0].parts[0].file_data);
+
+  // Video liefert Schritte ohne Zutaten, die Beschreibung die Zutaten: beides zusammen.
+  const merged = await run((body) => gemini(isVideo(body)
+    ? { is_recipe: true, title: 'Malfatti', ingredients: [], steps: [{ text: 'Spinat hacken', start: '0:03' }] }
+    : { is_recipe: true, title: 'Malfatti', ingredients: ['250 g Spinat', '250 g Ricotta'], steps: [] }));
+  assert.deepEqual(merged.ingredients, ['250 g Spinat', '250 g Ricotta']);
+  assert.deepEqual(merged.steps, [{ text: 'Spinat hacken', t: 3 }]);
+
+  // Gemini antwortet gar nicht (Kontingent aufgebraucht): Zutaten trotzdem aus der Beschreibung.
+  const quota = await run(() => Response.json({ error: { message: 'Quota exceeded' } }, { status: 429 }));
+  assert.equal(quota.ingredients.length, 11);
+  assert.equal(quota.title, 'Malfatti');
+  assert.equal(quota.steps_missing, true);
+  assert.match(quota.ai_error, /Quota exceeded/);
+  assert.equal(quota.notes, '');
+});
