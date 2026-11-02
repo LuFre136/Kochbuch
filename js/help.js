@@ -119,6 +119,7 @@ export const HELP = [
     lines: [
       'Jedem Tag lassen sich Rezepte zuordnen, mit der Anzahl Portionen.',
       'Beim Einplanen fragt die App, ob die Zutaten gleich auf eine Einkaufsliste sollen.',
+      '„Ändern“ an einem Eintrag verschiebt ihn auf einen anderen Tag oder ändert die Portionen. Steht das Rezept am neuen Tag schon im Plan, werden beide Einträge zusammengelegt. Mengen auf der Einkaufsliste rechnen sich mit, Abgehaktes bleibt, wie es ist.',
       'Ist ein geplanter Tag vorbei, merkt sich das Rezept das Datum als „zuletzt gekocht“ — danach kannst du die Übersicht sortieren.',
     ],
   },

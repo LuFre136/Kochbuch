@@ -4,7 +4,7 @@ import {
 } from './ingredients.js';
 import { suggestRecipes, STAPLES } from './pantry.js';
 import {
-  additionsFromPlan, findConflict, mergeInto, removeRecipe, removePlanEntry, recipesOnList, plannedIds, formatItemQuantity,
+  additionsFromPlan, findConflict, mergeInto, removeRecipe, removePlanEntry, retargetPlanEntry, recipesOnList, plannedIds, formatItemQuantity,
   frequentSuggestions,
 } from './shopping.js';
 import { PRODUCE, MONTHS, seasonOf, inSeason, seasonalRecipes } from './season.js';
@@ -3218,6 +3218,7 @@ async function renderPlan() {
             <p class="missing">${p.servings} ${p.servings === 1 ? 'Portion' : 'Portionen'}${onLists.has(p.id) ? ' · <span class="on-list">✓ auf der Einkaufsliste</span>' : ''}</p>
             <div class="entry-actions">
               ${onLists.has(p.id) ? '' : `<button class="link" data-shop="${p.id}">Auf die Einkaufsliste</button>`}
+              <button class="link" data-edit="${p.id}">Ändern</button>
               <button class="link danger-link" data-remove="${p.id}">Entfernen</button>
             </div></div>
         </div>`;
@@ -3242,6 +3243,12 @@ async function renderPlan() {
       if (error) toast(error.message); else renderPlan();
     };
   });
+  app.querySelectorAll('[data-edit]').forEach((b) => {
+    b.onclick = async () => {
+      const p = entries.find((x) => x.id === b.dataset.edit);
+      if (await editPlanEntry(p, byId.get(p.recipe_id), entries, onLists.has(p.id))) renderPlan();
+    };
+  });
   app.querySelectorAll('[data-shop]').forEach((b) => {
     b.onclick = async () => {
       if (await addPlanToList(toShop(entries.filter((p) => p.id === b.dataset.shop)))) renderPlan();
@@ -3249,6 +3256,77 @@ async function renderPlan() {
   });
   const all = $('#shop-all');
   if (all) all.onclick = async () => { if (await addPlanToList(toShop(open))) renderPlan(); };
+}
+
+// Datum und Portionen eines Plan-Eintrags ändern. Steht das Rezept am neuen Tag schon im
+// Plan, werden beide Einträge zusammengelegt (Portionen addiert). Stehen die Zutaten auf
+// einer Einkaufsliste, wachsen oder schrumpfen die Mengen dort mit.
+// Liefert true, wenn sich etwas geändert hat.
+async function editPlanEntry(p, r, entries, onList) {
+  const twinOn = (day) => entries.find((x) => x.id !== p.id && x.recipe_id === p.recipe_id && x.planned_for === day);
+  const { value, form } = await openSheet(`<h2>„${esc(r.title)}“ ändern</h2>
+    <label>Datum <input type="date" name="date" required min="${today()}" value="${p.planned_for}"></label>
+    <div class="plan-servings"><label for="plan-srv">Anzahl Portionen</label>
+      <div class="stepper" role="group" aria-label="Anzahl Portionen">
+        <button type="button" class="btn small" data-d="-1" aria-label="Eine Portion weniger">−</button>
+        <input id="plan-srv" type="number" name="servings" min="1" max="100" step="1" inputmode="numeric" required value="${p.servings}">
+        <button type="button" class="btn small" data-d="1" aria-label="Eine Portion mehr">+</button>
+      </div></div>
+    <p class="hint" id="plan-twin" hidden></p>
+    ${onList ? '<p class="hint">Die Mengen auf der Einkaufsliste werden an die neuen Portionen angepasst.</p>' : ''}
+    <div class="row">
+      <button class="btn primary" value="ok">Speichern</button>
+      <button class="btn ghost" value="cancel" formnovalidate>Abbrechen</button>
+    </div>`, (f) => {
+    const showTwin = () => {
+      const twin = twinOn(f.date.value);
+      const hint = f.querySelector('#plan-twin');
+      hint.hidden = !twin;
+      if (twin) hint.textContent = `An diesem Tag steht das Rezept schon mit ${twin.servings} ${twin.servings === 1 ? 'Portion' : 'Portionen'}. Beim Speichern werden beide Einträge zusammengelegt.`;
+    };
+    f.date.addEventListener('input', showTwin);
+    f.querySelectorAll('[data-d]').forEach((b) => {
+      b.onclick = () => {
+        const n = (Number(f.servings.value) || p.servings) + Number(b.dataset.d);
+        f.servings.value = Math.max(1, Math.min(100, n));
+      };
+    });
+    showTwin();
+  });
+  if (value !== 'ok') return false;
+  const day = form.date.value || p.planned_for;
+  const count = Math.max(1, Math.min(100, Math.round(Number(form.servings.value)) || p.servings));
+  if (day === p.planned_for && count === p.servings) return false;
+  if (day < today()) { toast('Das Datum liegt in der Vergangenheit'); return false; }
+  const twin = twinOn(day);
+  const factor = count / p.servings;
+
+  if (twin) {
+    const total = Math.min(100, twin.servings + count);
+    const { error } = await supabase.from('meal_plan').update({ servings: total }).eq('id', twin.id);
+    if (error) { toast(error.message); return false; }
+    if (onList && !(await retargetOnLists(p.id, { factor, to: twin.id }))) return true;
+    const { error: delError } = await supabase.from('meal_plan').delete().eq('id', p.id);
+    if (delError) { toast(delError.message); return true; }
+    toast(`Zusammengelegt: ${formatDay(day)}, ${total} ${total === 1 ? 'Portion' : 'Portionen'}`);
+    return true;
+  }
+  const { error } = await supabase.from('meal_plan').update({ planned_for: day, servings: count }).eq('id', p.id);
+  if (error) { toast(error.message); return false; }
+  if (onList && factor !== 1 && !(await retargetOnLists(p.id, { factor }))) return true;
+  toast(day === p.planned_for ? `${count} ${count === 1 ? 'Portion' : 'Portionen'} eingeplant` : `Verschoben auf ${formatDay(day)}`);
+  return true;
+}
+
+// Passt die Einkaufslisten an einen geänderten Plan-Eintrag an. Liefert false bei einem Fehler.
+async function retargetOnLists(planId, change) {
+  const { data, error } = await supabase.from('shopping_items').select('*');
+  if (error) { toast(error.message); return false; }
+  const results = await Promise.all(retargetPlanEntry(data, planId, change)
+    .map(({ id, ...patch }) => supabase.from('shopping_items').update(patch).eq('id', id)));
+  const failed = results.find((x) => x.error);
+  if (failed) { toast(`Einkaufsliste nicht angepasst: ${failed.error.message}`); return false; }
+  return true;
 }
 
 // ---------- Einkaufen ----------

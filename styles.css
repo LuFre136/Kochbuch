@@ -457,6 +457,7 @@ dialog.sheet.full {
 .plan-day h2 { margin: 20px 0 10px; }
 .plan-entry h3 a { color: inherit; text-decoration: none; }
 .entry-actions { display: flex; gap: 14px; margin-top: 4px; }
+.entry-actions .link { font-size: 0.875rem; }
 .plan-actions:empty { display: none; }
 .plan-actions { margin-bottom: 8px; }
 .on-list { color: #2f7a3a; }
@@ -791,3 +792,8 @@ body.offline .offline-only { display: block; margin: 0 0 6px; }
 .timer-howto ol { padding-left: 1.3em; margin: 8px 0 12px; }
 .timer-howto li { margin-bottom: 6px; }
 .timer-howto strong { white-space: nowrap; }
+
+/* Plan-Eintrag ändern: Portionen mit − / + */
+.plan-servings { display: grid; gap: 4px; }
+.plan-servings .stepper input { width: 72px; text-align: center; }
+.plan-servings .stepper .btn { height: 44px; width: 44px; }

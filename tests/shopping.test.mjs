@@ -152,3 +152,28 @@ test('häufig gekauft: ohne Zählung kommen die abgehakten Einträge', () => {
   const items = [{ name: 'Milch', checked: true, amount: 1, unit: 'l' }, { name: 'milch', checked: true }, { name: 'Brot', checked: false }];
   assert.deepEqual(frequentSuggestions([], items, key), [{ key: 'milch', name: 'Milch', amount: 1, unit: 'l' }]);
 });
+
+import { retargetPlanEntry } from '../js/shopping.js';
+
+test('Plan-Eintrag mit neuer Portionszahl rechnet die Liste mit um', () => {
+  const items = [
+    { id: '1', amount: 500, unit: 'g', checked: false, sources: [
+      { recipe_id: 'r1', plan_id: 'mo', title: 'Brot', amount: 250 },
+      { recipe_id: 'r1', plan_id: 'fr', title: 'Brot', amount: 250 }] },
+    { id: '2', amount: 3, unit: '', checked: true, sources: [{ recipe_id: 'r1', plan_id: 'mo', title: 'Brot', amount: 3 }] },
+    { id: '3', amount: null, unit: '', checked: false, sources: [{ recipe_id: 'r1', plan_id: 'mo', title: 'Brot', amount: null }] },
+    { id: '4', amount: 1, unit: '', checked: false, sources: [{ recipe_id: 'r2', plan_id: 'x', title: 'Kuchen', amount: 1 }] },
+  ];
+  assert.deepEqual(retargetPlanEntry(items, 'mo', { factor: 2 }), [
+    { id: '1', amount: 750, sources: [
+      { recipe_id: 'r1', plan_id: 'mo', title: 'Brot', amount: 500 },
+      { recipe_id: 'r1', plan_id: 'fr', title: 'Brot', amount: 250 }] },
+  ]);
+  // Zusammenlegen: Quellen zeigen danach auf den anderen Eintrag, auch bei Abgehaktem.
+  const moved = retargetPlanEntry(items, 'mo', { factor: 0.5, to: 'fr' });
+  assert.deepEqual(moved.map((u) => [u.id, u.amount, u.sources.map((s) => `${s.plan_id}:${s.amount}`)]), [
+    ['1', 375, ['fr:125', 'fr:250']],
+    ['2', 3, ['fr:3']],
+    ['3', null, ['fr:null']],
+  ]);
+});
