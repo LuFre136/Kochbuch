@@ -75,6 +75,7 @@ export const HELP = [
     title: 'Videos, Bilder und Zeitstempel',
     lines: [
       'Videos und Bilder stehen im Rezept nach den Zutaten, über der Zubereitung. Hat ein Rezept mehrere, schaltet die Leiste darüber um.',
+      'Tippe auf ein Bild, um es im Vollbild zu sehen. Dort wischst du zum nächsten Bild, vergrößerst mit zwei Fingern oder doppeltem Tippen und schließt mit dem X, durch Ziehen nach unten oder Tippen neben das Bild.',
       'Ein Tipp auf den Zeitstempel eines Schritts springt im Video an die Stelle und startet es, auch wenn gerade ein anderes Video zu sehen ist.',
       'Startet der Ton nicht, liegt es am Browser: er lässt Videos nur stumm von allein anlaufen. Die App versucht es dann stumm und schaltet den Ton gleich danach dazu.',
       'Beim Bearbeiten stellst du unter den Schritten ein, zu welchem Video ein Zeitstempel gehört.',

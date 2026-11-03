@@ -5,6 +5,13 @@
 
 export const NEWS = [
   {
+    version: '2026-11-03-bilder-gross',
+    title: 'Bilder in groß',
+    lines: [
+      { text: 'Tippe im Rezept auf ein Bild, dann siehst du es im Vollbild. Wische zum nächsten Bild, vergrößere mit zwei Fingern oder doppeltem Tippen, und schließe mit dem X oder indem du nach unten ziehst.', ziel: '#/hilfe/videos' },
+    ],
+  },
+  {
     version: '2026-11-02-plan-aendern',
     title: 'Geplante Rezepte ändern',
     lines: [
