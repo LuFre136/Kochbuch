@@ -5,6 +5,13 @@
 
 export const NEWS = [
   {
+    version: '2026-11-02-plan-aendern',
+    title: 'Geplante Rezepte ändern',
+    lines: [
+      { text: 'Im Plan hat jeder Eintrag jetzt „Ändern“: Damit verschiebst du ein Rezept auf einen anderen Tag oder änderst die Anzahl Portionen. Stehen die Zutaten schon auf der Einkaufsliste, passen sich die Mengen dort an.', ziel: '#/plan' },
+    ],
+  },
+  {
     version: '2026-10-25-kochen-plan',
     title: 'Kochen landet im Plan',
     lines: [

@@ -132,6 +132,34 @@ function removeSources(items, matches) {
   return { updates, deletes };
 }
 
+// Ein Plan-Eintrag bekommt eine andere Portionszahl (factor = neu / alt) und/oder geht in
+// einem anderen Eintrag auf (to = dessen id). Die Beiträge auf der Liste wachsen oder
+// schrumpfen mit; abgehakte Einträge sind schon gekauft und bleiben, wie sie sind.
+export function retargetPlanEntry(items, planId, { factor = 1, to = planId } = {}) {
+  const updates = [];
+  for (const item of items) {
+    const sources = item.sources ?? [];
+    if (!sources.some((s) => s.plan_id === planId)) continue;
+    const scale = !item.checked && factor !== 1;
+    let delta = 0;
+    const next = sources.map((s) => {
+      if (s.plan_id !== planId) return s;
+      if (!scale || s.amount == null) return { ...s, plan_id: to };
+      const amount = round(Number(s.amount) * factor);
+      delta += amount - Number(s.amount);
+      return { ...s, plan_id: to, amount };
+    });
+    let amount = item.amount;
+    if (amount != null && delta) {
+      amount = round(Number(amount) + delta);
+      if (amount <= 0) amount = null;
+    }
+    if (amount === item.amount && to === planId) continue;
+    updates.push({ id: item.id, amount, sources: next });
+  }
+  return updates;
+}
+
 // Rezepte, die auf der Liste vorkommen, je einmal.
 export function recipesOnList(items) {
   const seen = new Map();
