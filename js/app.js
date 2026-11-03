@@ -24,6 +24,7 @@ import {
 } from './sorting.js';
 import { HELP, helpFor, helpTopic } from './help.js';
 import { NEWS, newsSince, latestVersion } from './news.js';
+import { openLightbox } from './lightbox.js';
 import {
   ingredientsFromStep, remainingIngredients, ingredientKey, mentionsIngredient,
   scaleIngredient, combinedTitle, stepsForCombine, combinedImages,
@@ -2027,6 +2028,12 @@ function showRecipe(r, { own, back, backLabel, from = '', group = [], index = 0,
     app.querySelectorAll('[data-img]').forEach((b) => {
       b.onclick = () => strip.scrollBy({ left: Number(b.dataset.img) * strip.clientWidth, behavior: 'smooth' });
     });
+    // Antippen öffnet das Bild in groß, dort lässt sich weiterblättern und vergrößern.
+    const urls = r.images.map(imageUrl);
+    strip.querySelectorAll('img').forEach((img, i) => {
+      // Nach dem Schließen steht die Leiste im Rezept auf dem zuletzt gezeigten Bild.
+      img.onclick = () => openLightbox(urls, i, { onClose: (at) => strip.scrollTo({ left: at * strip.clientWidth }) });
+    });
   };
   bindGallery();
 
@@ -2839,6 +2846,8 @@ async function renderEditor(id) {
       ...keptImages.map((p, i) => `<div class="thumb"><img src="${esc(imageUrl(p))}" alt=""><button type="button" data-kept="${i}" aria-label="Bild entfernen">×</button></div>`),
       ...newFiles.map((f, i) => `<div class="thumb"><img src="${f.preview}" alt=""><button type="button" data-new="${i}" aria-label="Bild entfernen">×</button></div>`),
     ].join('');
+    const thumbUrls = [...keptImages.map(imageUrl), ...newFiles.map((f) => f.preview)];
+    thumbs.querySelectorAll('img').forEach((img, i) => { img.onclick = () => openLightbox(thumbUrls, i); });
     thumbs.querySelectorAll('button').forEach((b) => {
       b.onclick = () => {
         if (b.dataset.kept != null) keptImages.splice(Number(b.dataset.kept), 1);

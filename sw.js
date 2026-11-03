@@ -4,14 +4,14 @@
 //   die App bekommt Bescheid, von wann sie ist.
 // - Bilder und die Supabase-Bibliothek von esm.sh: aus dem Cache, wenn schon da. Dieser
 //   Cache bleibt bei Updates der App erhalten.
-const CACHE = 'kochbuch-v43';
+const CACHE = 'kochbuch-v44';
 const DATA = 'kochbuch-daten';
 const MEDIA = 'kochbuch-bilder';
 const SUPABASE = 'https://rgjwlpxrzfcrjyzxetyy.supabase.co';
 const SHELL = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
   'js/app.js', 'js/supabase.js', 'js/config.js', 'js/ingredients.js', 'js/pantry.js', 'js/shopping.js', 'js/season.js', 'js/video.js', 'js/categories.js', 'js/places.js', 'js/links.js',
-  'js/alternatives.js', 'js/combine.js', 'js/sorting.js', 'js/help.js', 'js/news.js', 'js/cooking.js',
+  'js/alternatives.js', 'js/combine.js', 'js/sorting.js', 'js/help.js', 'js/news.js', 'js/cooking.js', 'js/lightbox.js',
   'icons/icon-192.png', 'icons/apple-touch-icon.png',
 ];
 
