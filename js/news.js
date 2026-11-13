@@ -5,6 +5,13 @@
 
 export const NEWS = [
   {
+    version: '2026-11-13-seitentext-import',
+    title: 'Import von mehr Rezeptseiten',
+    lines: [
+      { text: 'Seiten wie gusto.at, die keine Rezeptdaten mitliefern, lassen sich jetzt trotzdem per Link importieren: Die KI liest dann den Text der Seite und übernimmt Zutaten und Zubereitung.', ziel: '#/neu' },
+    ],
+  },
+  {
     version: '2026-11-02-plan-aendern',
     title: 'Geplante Rezepte ändern',
     lines: [

@@ -444,3 +444,54 @@ test('Malfatti-Short: Zutaten aus der Beschreibung, auch wenn das Video hängt o
   assert.match(quota.ai_error, /Quota exceeded/);
   assert.equal(quota.notes, '');
 });
+
+test('repariert JSON-LD mit rohen Zeilenumbrüchen und Komma am Ende', () => {
+  const html = `<script type="application/ld+json">
+  {"@type":"Recipe","name":"Suppe","recipeIngredient":["1 l Wasser","Salz",],
+   "recipeInstructions":"Wasser kochen.
+Salzen."}
+  </script>`;
+  const r = extractRecipe(html, 'https://example.at/suppe');
+  assert.equal(r.title, 'Suppe');
+  assert.deepEqual(r.ingredients, ['1 l Wasser', 'Salz']);
+  assert.deepEqual(r.steps, ['Wasser kochen.', 'Salzen.']);
+});
+
+test('liest Microdata, wenn kein JSON-LD-Rezept da ist', () => {
+  const html = `<div itemscope itemtype="https://schema.org/Recipe"><h1 itemprop="name">Dal</h1>
+    <ul><li itemprop="recipeIngredient"><span>200 g</span> <span>Linsen</span></li>
+    <li itemprop="recipeIngredient">1 Zwiebel</li></ul>
+    <div itemprop="recipeInstructions"><p>Zwiebel würfeln.</p><div><p>Linsen kochen.</p></div></div></div>`;
+  const r = extractRecipe(html, 'https://example.de/dal');
+  assert.deepEqual(r.ingredients, ['200 g Linsen', '1 Zwiebel']);
+  assert.deepEqual(r.steps, ['Zwiebel würfeln.', 'Linsen kochen.']);
+  assert.equal(r.structured, true);
+});
+
+test('Seite ohne Rezeptdaten: Seitentext ohne Menü und Fußzeile', () => {
+  const html = fixture('ohne-jsonld.html');
+  const r = extractRecipe(html, 'https://www.gusto.at/rezepte/khachapuri-11461373');
+  assert.equal(r.ingredients.length, 0);
+  assert.equal(r.imageUrl, 'https://www.gusto.at/media/khachapuri.jpg');
+  const text = fn.pageText(html);
+  assert.match(text, /^Khachapuri/);
+  assert.match(text, /500 g glattes Mehl/);
+  assert.doesNotMatch(text, /Kochschule|Impressum|dataLayer/);
+});
+
+test('Seite ohne Rezeptdaten und ohne KI: Listen unter Zutaten/Zubereitung', async () => {
+  const html = fixture('ohne-jsonld.html');
+  const r = await fn.completeFromPage(extractRecipe(html, 'https://www.gusto.at/x'), html);
+  assert.equal(r.page_text, true);
+  assert.equal(r.ai, 'none');
+  assert.ok(r.ingredients.includes('500 g glattes Mehl'));
+  assert.ok(r.ingredients.includes('4 Dotter'));
+  assert.equal(r.steps[0], 'Mehl, Germ und Wasser verkneten und gehen lassen.');
+  assert.equal(r.steps.length, 3);
+});
+
+test('vollständiges Rezept wird nicht nachträglich per Seitentext ergänzt', async () => {
+  const html = fixture('chefkoch.html');
+  const r = extractRecipe(html, 'https://www.chefkoch.de/rezepte/123/x.html');
+  assert.equal(await fn.completeFromPage(r, html), r);
+});

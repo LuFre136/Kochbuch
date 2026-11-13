@@ -243,12 +243,112 @@ export interface ImportedRecipe {
   structured: boolean;
 }
 
+// JSON-LD, das JSON.parse ablehnt: rohe Zeilenumbrüche/Tabs in Strings, HTML-Kommentar
+// oder CDATA drumherum, Komma vor } oder ]. Viele Redaktionssysteme liefern so etwas aus.
+export function parseJsonLoose(raw: string): unknown {
+  const s = raw.trim()
+    .replace(/^<!--|-->$/g, '')
+    .replace(/^\/\*\s*<!\[CDATA\[\s*\*\/|\/\*\s*\]\]>\s*\*\/$/g, '')
+    .trim();
+  try { return JSON.parse(s); } catch { /* weiter mit der Reparatur */ }
+  let out = '';
+  let inString = false;
+  let escaped = false;
+  for (const ch of s) {
+    if (!inString) {
+      if (ch === '"') inString = true;
+      out += ch;
+    } else if (escaped) {
+      escaped = false;
+      out += ch;
+    } else if (ch === '\\') {
+      escaped = true;
+      out += ch;
+    } else if (ch === '"') {
+      inString = false;
+      out += ch;
+    } else if (ch.charCodeAt(0) < 0x20) {
+      out += ch === '\n' ? '\\n' : ch === '\t' ? '\\t' : ch === '\r' ? '' : ' ';
+    } else {
+      out += ch;
+    }
+  }
+  return JSON.parse(out.replace(/,(\s*[}\]])/g, '$1'));
+}
+
+// Inhalt des Elements, das bei `start` beginnt (gleichnamige Elemente darin werden mitgezählt).
+function elementInner(html: string, start: number): string {
+  const open = html.slice(start).match(/^<([a-z][a-z0-9]*)\b[^>]*>/i);
+  if (!open) return '';
+  const tag = open[1].toLowerCase();
+  if (/^(meta|link|img|br|input|source)$/.test(tag) || open[0].endsWith('/>')) return '';
+  const re = new RegExp(`<(/?)${tag}\\b[^>]*>`, 'gi');
+  re.lastIndex = start + open[0].length;
+  let depth = 1;
+  for (let m = re.exec(html); m; m = re.exec(html)) {
+    if (m[0].endsWith('/>')) continue;
+    depth += m[1] ? -1 : 1;
+    if (depth === 0) return html.slice(start + open[0].length, m.index);
+  }
+  return html.slice(start + open[0].length);
+}
+
+const DROP_ELEMENTS = /<(script|style|noscript|svg|template|iframe|button|select|form)\b[\s\S]*?<\/\1>/gi;
+const BLOCK_TAGS = /<\/?(p|div|li|ul|ol|h[1-6]|tr|table|tbody|thead|section|article|main|header|footer|aside|nav|figure|figcaption|dl|dt|dd|blockquote|br)\b[^>]*>/gi;
+
+// HTML in Textzeilen: Blöcke und Listenpunkte werden zu Zeilen, Tabellenzellen bleiben in einer Zeile.
+export function htmlToLines(html: string): string[] {
+  const text = html
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(DROP_ELEMENTS, ' ')
+    .replace(BLOCK_TAGS, '\n')
+    .replace(/<\/?(td|th)\b[^>]*>/gi, ' ')
+    .replace(/<[^>]+>/g, '');
+  return decodeEntities(text)
+    .split('\n')
+    .map((l) => l.replace(/[ \t ]+/g, ' ').trim())
+    .filter(Boolean);
+}
+
+// schema.org-Microdata (itemprop="recipeIngredient" usw.), für Seiten ohne JSON-LD.
+export function microdata(html: string): { ingredients: string[]; steps: string[] } {
+  const values = (props: string) => {
+    const out: string[][] = [];
+    const re = new RegExp(`<[a-z][a-z0-9]*\\b[^>]*\\bitemprop=["'](?:[^"']*\\s)?(?:${props})(?:\\s[^"']*)?["'][^>]*>`, 'gi');
+    for (const m of html.matchAll(re)) {
+      const content = m[0].match(/\bcontent=["']([^"']*)["']/i)?.[1];
+      out.push(content != null ? [cleanText(content)].filter(Boolean) : htmlToLines(elementInner(html, m.index!)));
+    }
+    return out;
+  };
+  const ingredients = values('recipeIngredient|ingredients').map((lines) => lines.join(' ')).filter(Boolean);
+  const steps = values('recipeInstructions').flat();
+  return { ingredients: [...new Set(ingredients)], steps: [...new Set(steps)] };
+}
+
+// Sichtbarer Text der Seite ohne Menüs, Kopf- und Fußzeile, für die Auswertung durch die KI.
+export function pageText(html: string): string {
+  const body = html.match(/<body\b[\s\S]*/i)?.[0] ?? html;
+  const clean = body
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(DROP_ELEMENTS, ' ')
+    .replace(/<(nav|header|footer|aside)\b[\s\S]*?<\/\1>/gi, ' ');
+  // Gibt es einen Hauptbereich mit genug Text, nur diesen nehmen.
+  for (const tag of ['main', 'article']) {
+    const at = clean.search(new RegExp(`<${tag}\\b`, 'i'));
+    if (at < 0) continue;
+    const lines = htmlToLines(elementInner(clean, at));
+    if (lines.join(' ').length > 400) return lines.join('\n').slice(0, MAX_TEXT);
+  }
+  return htmlToLines(clean).join('\n').slice(0, MAX_TEXT);
+}
+
 export function extractRecipe(html: string, pageUrl: string): ImportedRecipe {
   let recipe: Record<string, unknown> | null = null;
   const scripts = html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi);
   for (const [, json] of scripts) {
     try {
-      recipe = findRecipe(JSON.parse(json.trim()));
+      recipe = findRecipe(parseJsonLoose(json));
     } catch {
       // Manche Seiten liefern kaputtes JSON-LD; dann einfach den nächsten Block versuchen.
     }
@@ -261,13 +361,17 @@ export function extractRecipe(html: string, pageUrl: string): ImportedRecipe {
   };
 
   if (!recipe) {
+    // Ohne JSON-LD: vielleicht Microdata im HTML (itemprop="recipeIngredient").
+    const md = microdata(html);
+    const { steps, notes } = splitNotes(md.steps);
     return {
       title: metaContent(html, 'og:title') ?? cleanText(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]),
       description: metaContent(html, 'og:description') ?? metaContent(html, 'description') ?? '',
-      tags: [], servings: null, total_minutes: null, cook_minutes: null, ingredients: [], steps: [], notes: '',
+      tags: [], servings: null, total_minutes: null, cook_minutes: null,
+      ingredients: md.ingredients, steps, notes,
       nutrition: null,
       imageUrl: absolute(metaContent(html, 'og:image')),
-      structured: false,
+      structured: md.ingredients.length > 0,
     };
   }
 
@@ -278,6 +382,15 @@ export function extractRecipe(html: string, pageUrl: string): ImportedRecipe {
   const tags = [...new Set([
     ...listOf(recipe.recipeCategory), ...listOf(recipe.recipeCuisine), ...listOf(recipe.keywords),
   ])].slice(0, 6);
+
+  // JSON-LD ohne Zutaten oder Schritte: im HTML nach Microdata schauen.
+  let ingredients = listOfLines(recipe.recipeIngredient ?? recipe.ingredients);
+  let instructions = extractInstructions(recipe.recipeInstructions);
+  if (!ingredients.length || !instructions.length) {
+    const md = microdata(html);
+    if (!ingredients.length) ingredients = md.ingredients;
+    if (!instructions.length) instructions = md.steps;
+  }
 
   const prep = parseDuration(recipe.prepTime);
   const cook = parseDuration(recipe.cookTime);
@@ -290,8 +403,8 @@ export function extractRecipe(html: string, pageUrl: string): ImportedRecipe {
     servings: parseYield(recipe.recipeYield),
     total_minutes: total,
     cook_minutes: cook,
-    ingredients: listOfLines(recipe.recipeIngredient ?? recipe.ingredients),
-    ...splitNotes(extractInstructions(recipe.recipeInstructions)),
+    ingredients,
+    ...splitNotes(instructions),
     nutrition: parseNutrition(recipe.nutrition),
     imageUrl: absolute(firstImageUrl(recipe.image) ?? metaContent(html, 'og:image')),
     structured: true,
@@ -563,11 +676,12 @@ const AI_SCHEMA = {
   required: ['is_recipe', 'title', 'ingredients', 'steps'],
 };
 
-export type AiSource = 'video' | 'text' | 'images' | 'paste' | 'subtitles';
+export type AiSource = 'video' | 'text' | 'images' | 'paste' | 'page' | 'subtitles';
 
 const AI_INTRO: Record<AiSource, string> = {
   video: 'Du bekommst ein Kochvideo samt Titel und Beschreibung. Schau dir das ganze Video an (Bild, Ton und eingeblendete Texte) und schreibe das Rezept auf.',
   text: 'Du bekommst Titel und Beschreibung eines Kochvideos. Schreibe das Rezept auf, das darin steht.',
+  page: 'Du bekommst den Text einer Rezept-Webseite (Menüs sind entfernt). Schreibe das Hauptrezept der Seite auf. Werbung, Kommentare, Bewertungen und Vorschläge für andere Rezepte gehören nicht dazu. Steht die Zutatenliste doppelt da (z. B. als Liste und als Tabelle), jede Zutat nur einmal.',
   paste: 'Du bekommst einen Text, in dem ein Rezept steht, z. B. einen Kommentar, eine Nachricht oder Notizen. Schreibe das Rezept auf.',
   images: 'Du bekommst ein oder mehrere Fotos eines Rezepts, z. B. Seiten aus einem Kochbuch oder eine handschriftliche Rezeptkarte. Lies das Rezept vollständig ab (auch Handschrift; mehrere Fotos gehören zu einem Rezept) und schreibe es auf.',
   subtitles: 'Du bekommst die Untertitel eines Kochvideos, jede Zeile mit der Stelle im Video, dazu Titel und Bildunterschrift. Schreibe das Rezept auf, das darin gesprochen wird.',
@@ -579,7 +693,7 @@ export function aiPrompt(meta: VideoMeta | null, source: AiSource): string {
     'Regeln:',
     '- Alles auf Deutsch. Titel kurz und ohne Emojis oder Hashtags. Beschreibung höchstens zwei Sätze.',
     '- Zutaten: eine pro Eintrag, Menge zuerst, metrische Einheiten (z. B. "200 g Mehl", "1 EL Olivenöl", "2 Knoblauchzehen", "Salz"). Zusätze wie die Mehlsorte in Klammern dahinter ("200 g Mehl (Type 405)"). Nur Mengen nennen, die vorkommen; nichts erfinden.',
-    source === 'images'
+    source === 'images' || source === 'page'
       ? '- Schritte: in der Reihenfolge der Vorlage, jeweils ein bis drei kurze Sätze, keine Nummerierung. Unleserliches nicht raten, sondern mit "[unleserlich]" kennzeichnen.'
       : '- Schritte: in der Reihenfolge des Videos, jeweils ein bis drei kurze Sätze, keine Nummerierung.',
     ...(source === 'video' ? [
@@ -596,7 +710,7 @@ export function aiPrompt(meta: VideoMeta | null, source: AiSource): string {
     '- notes: Tipps und Varianten, sonst leer.',
     '- nutrition: nur, wenn Nährwerte ausdrücklich angegeben sind (kcal und Gramm; per_100g = true, wenn sie für 100 g gelten, sonst pro Portion). Nicht schätzen; sonst null.',
     '- Ist es kein Rezept, setze is_recipe auf false und lass Zutaten und Schritte leer.',
-    ...(meta && source === 'paste' ? ['', `Text:\n${meta.description.slice(0, MAX_TEXT)}`]
+    ...(meta && (source === 'paste' || source === 'page') ? ['', `Text:\n${meta.description.slice(0, MAX_TEXT)}`]
       : meta ? ['', `Titel: ${meta.title}`, `Beschreibung:\n${meta.description.slice(0, 8000) || '(keine)'}`] : []),
   ].join('\n');
 }
@@ -1278,6 +1392,9 @@ async function handle(req: Request): Promise<Response> {
       redirect: 'follow',
       signal: AbortSignal.timeout(15_000),
     });
+    if (res.status === 401 || res.status === 403 || res.status === 429) {
+      return json({ error: `Die Seite lässt den automatischen Abruf nicht zu (Fehler ${res.status}). Öffne das Rezept im Browser, kopiere den Text und nutze „Text einfügen“.` }, 502);
+    }
     if (!res.ok) return json({ error: `Die Seite hat mit Fehler ${res.status} geantwortet.` }, 502);
     html = new TextDecoder().decode(await readLimited(res, MAX_PAGE_BYTES));
     url = res.url || url;
@@ -1285,10 +1402,61 @@ async function handle(req: Request): Promise<Response> {
     return json({ error: `Die Seite konnte nicht geladen werden: ${(err as Error).message}` }, 502);
   }
 
-  const recipe = extractRecipe(html, url);
+  const recipe = await completeFromPage(extractRecipe(html, url), html);
   const { imageUrl, ...rest } = recipe;
   const image = imageUrl ? await fetchImage(imageUrl) : null;
   return json({ ...rest, source: url, image });
+}
+
+// Seiten ohne (vollständige) Rezeptdaten, z. B. gusto.at: den sichtbaren Text der Seite auswerten.
+// Erst die KI; antwortet sie nicht, die Liste unter "Zutaten" / "Zubereitung" direkt übernehmen.
+export async function completeFromPage(recipe: ImportedRecipe, html: string) {
+  if (recipe.ingredients.length && recipe.steps.length) return recipe;
+  const text = pageText(html);
+  if (!looksLikeRecipe(text)) return recipe;
+  const key = env('GEMINI_API_KEY');
+  let aiError = '';
+  if (key) {
+    try {
+      const meta = { title: recipe.title, description: text, tags: [], thumbnail: null, seconds: null };
+      const ai = normalizeAiRecipe(await askGemini(key, [{ text: aiPrompt(meta, 'page') }], true, 60_000), null, false);
+      if (ai.is_recipe && (ai.ingredients.length || ai.steps.length)) {
+        const ingredients = recipe.ingredients.length ? recipe.ingredients : ai.ingredients;
+        const steps = recipe.steps.length ? recipe.steps : ai.steps.map((s) => (typeof s === 'string' ? s : s.text));
+        return {
+          ...recipe,
+          title: recipe.title || ai.title,
+          description: recipe.description || ai.description,
+          tags: recipe.tags.length ? recipe.tags : ai.tags,
+          servings: recipe.servings ?? ai.servings,
+          total_minutes: recipe.total_minutes ?? ai.total_minutes,
+          cook_minutes: recipe.cook_minutes ?? ai.cook_minutes,
+          ingredients,
+          steps,
+          notes: recipe.notes || ai.notes,
+          nutrition: recipe.nutrition ?? ai.nutrition,
+          structured: ingredients.length > 0,
+          ai_from: 'page',
+          ...(ingredients.length && !steps.length ? { steps_missing: true } : {}),
+        };
+      }
+    } catch (err) {
+      aiError = (err as Error).message;
+    }
+  }
+  const plain = recipeFromText(text);
+  const ingredients = recipe.ingredients.length ? recipe.ingredients : [...new Set(plain.ingredients)].slice(0, 60);
+  const steps = recipe.steps.length ? recipe.steps : plain.steps.slice(0, 40);
+  return {
+    ...recipe,
+    ingredients,
+    steps,
+    structured: ingredients.length > 0,
+    page_text: true,
+    ai: !key ? 'none' : 'failed',
+    ...(ingredients.length && !steps.length ? { steps_missing: true } : {}),
+    ...(aiError ? { ai_error: aiError } : {}),
+  };
 }
 
 // deno-lint-ignore no-explicit-any

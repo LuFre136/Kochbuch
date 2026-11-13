@@ -4672,7 +4672,7 @@ async function renderCookbookRecipe(ownerId, recipeId, altId = null) {
 function importMessage(data) {
   // Zutaten erkannt, Schritte nicht: das sagen, statt still eine leere Zubereitung zu zeigen.
   if (data.steps_missing) {
-    return `Die Zutaten sind übernommen, aber die Zubereitungsschritte konnte die KI nicht erkennen${data.ai_error ? ` (${data.ai_error})` : ' (oft, wenn im Video nur gekocht und nichts erklärt wird)'}. Bitte die Schritte selbst ergänzen oder den Import später noch einmal versuchen.`;
+    return `Die Zutaten sind übernommen, aber die Zubereitungsschritte konnte die KI nicht erkennen${data.ai_error ? ` (${data.ai_error})` : (data.video ? ' (oft, wenn im Video nur gekocht und nichts erklärt wird)' : '')}. Bitte die Schritte selbst ergänzen oder den Import später noch einmal versuchen.`;
   }
   if (data.photos) {
     return data.ingredients?.length || data.steps?.length
@@ -4690,6 +4690,8 @@ function importMessage(data) {
       : 'Im Text wurde kein Rezept erkannt.';
   }
   if (data.ingredients?.length) {
+    if (data.ai_from === 'page') return 'Die Seite hat keine Rezeptdaten, darum hat die KI den Text der Seite gelesen. Prüfe Mengen und Schritte, dann tippe auf Speichern.';
+    if (data.page_text) return `Die Seite hat keine Rezeptdaten und die KI hat nicht geantwortet${data.ai_error ? ` (${data.ai_error})` : ''}. Zutaten und Schritte wurden direkt aus dem Seitentext übernommen: Bitte genau prüfen.`;
     if (!data.video) return 'Importiert. Prüfe die Angaben und tippe auf Speichern.';
     // ai_from sagt, woraus das Rezept kommt; bei TikTok sind das die Untertitel oder die Bilder.
     const from = {
@@ -4699,7 +4701,11 @@ function importMessage(data) {
     }[data.ai_from];
     return from ?? 'Aus dem Video übernommen. Die KI kann sich irren: Prüfe Mengen, Schritte und Zeitstempel, dann tippe auf Speichern.';
   }
-  if (!data.video) return 'Auf dieser Seite wurden keine Rezeptdaten gefunden. Titel und Bild sind übernommen, den Rest bitte selbst ergänzen.';
+  if (!data.video && data.page_text) {
+    const why = data.ai === 'none' ? 'für das Auslesen per KI fehlt in Supabase das Secret GEMINI_API_KEY' : `die KI-Auswertung hat nicht geklappt${data.ai_error ? ` (${data.ai_error})` : ''}`;
+    return `Die Seite hat keine Rezeptdaten und ${why}. Titel und Bild sind übernommen. Tipp: Rezepttext auf der Seite kopieren und mit „Text einfügen“ übernehmen.`;
+  }
+  if (!data.video) return 'Auf dieser Seite wurden keine Rezeptdaten gefunden. Titel und Bild sind übernommen. Tipp: Rezepttext auf der Seite kopieren und mit „Text einfügen“ übernehmen.';
   if (data.ai === 'none') return 'Video übernommen. Für Zutaten und Schritte fehlt in Supabase noch das Secret GEMINI_API_KEY (siehe README).';
   if (data.ai === 'failed') return `Video übernommen, aber die Auswertung hat nicht geklappt${data.ai_error ? ` (${data.ai_error})` : ''}. Die Videobeschreibung steht in den Notizen.`;
   if (data.video.provider === 'tiktok') return 'In Untertiteln, Bildern und Text zum TikTok steht kein Rezept. Tippe in TikTok auf „Teilen“ → „Video speichern“ und lade das Video hier mit „🎬 Aus Video“ hoch. Titel, Bild und Link sind schon übernommen.';
